@@ -1,0 +1,56 @@
+General map looks like this:
+
+			User talks → audio sent → Whisper → GPT → ElevenLabs → D-ID → return video → frontend plays it.
+			
+			
+			
+			
+
+--------------------------next page---------------------------------
+Frontend (UI):
+			React (Next.js on Vercel — fastest to deploy).
+			Simple UI: 🎤 button to record speech, 🎬 video player to show avatar.
+
+
+
+Backend (glue logic):
+			Node.js (Express) or Python (FastAPI).
+
+
+
+Routes:
+			/stt → Send audio → Whisper API → text.
+			/chat → Send text → GPT-4 → response.
+			/tts → Send text → ElevenLabs API → speech.
+			/avatar → Send speech + text → D-ID API → talking avatar video.
+
+
+
+
+
+
+APIs (to save time):
+			STT: OpenAI Whisper API.
+			LLM: OpenAI GPT-4/5 API.
+			TTS: ElevenLabs (super realistic).
+			Avatar video: D-ID API (instant talking head with lip-sync).
+
+
+
+
+
+2. Development Flow (Step-by-Step)
+			Frontend Setup
+			Next.js app on Vercel.
+			UI: Record button → sends audio blob to backend.
+			Video player → shows returned avatar response.
+
+
+
+
+Backend Setup
+			Use Express (Node.js) or FastAPI (Python).
+			Handle 3 API calls: Whisper → GPT → ElevenLabs → D-ID.
+			Return video URL (D-ID gives you a streamable link).
+
+

@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node.js
+node_modules/
+dist/
+build/
+
+# Logs
+*.log
+
+# Env/secrets
+.env
+
+# System/IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Media (ignore big video, keep images)
+avatar_video.mp4

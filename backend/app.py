@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 import openai, os
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,5 +39,18 @@ async def speech_to_text(file: UploadFile = File(...)):
             file=audio_file
         )
         return {"text": transcription.text}
+    except Exception as e:
+        return {"error": str(e)}
+    
+
+@app.post("/chat")
+async def chat(prompt: str = Form(...)):
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",   # or "gpt-4o" if you want full GPT-4o
+            messages=[{"role": "user", "content": prompt}]
+        )
+        reply = response.choices[0].message.content
+        return {"reply": reply}
     except Exception as e:
         return {"error": str(e)}

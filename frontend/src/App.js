@@ -28,35 +28,57 @@ const App = () => {
   ];
 
   // Handle avatar click for voice recording
-  const handleAvatarClick = () => {
-    if (isRecording) return;
-    
-    setIsRecording(true);
-    
-    // Simulate 3-second recording
-    setTimeout(() => {
+  const handleAvatarClick = async () => {
+  if (isRecording) return;
+  setIsRecording(true);
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mediaRecorder = new MediaRecorder(stream);
+    const audioChunks = [];
+
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = async () => {
       setIsRecording(false);
-      
-      // Add simulated user message
+
+      // Convert to Blob
+      const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+
+      // Send to backend /stt
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.wav');
+
+      const res = await fetch('http://localhost:8000/stt', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+
+      // Add user transcription message
       const userMessage = {
         id: Date.now(),
         role: 'user',
-        content: 'Hey, I love indie rock music!',
-        timestamp: new Date()
+        content: data.text,
+        timestamp: new Date(),
       };
-      
-      // Add AI response
-      const aiResponse = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: musicResponses[Math.floor(Math.random() * musicResponses.length)],
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, userMessage, aiResponse]);
-      setIsChatOpen(true); // Auto-open chat after voice interaction
-    }, 3000);
-  };
+
+      setMessages((prev) => [...prev, userMessage]);
+
+      // TODO: send data.text to /chat next
+    };
+
+    mediaRecorder.start();
+    setTimeout(() => mediaRecorder.stop(), 3000); // record 3 sec
+  } catch (error) {
+    console.error('Error recording audio:', error);
+    setIsRecording(false);
+  }
+};
 
   // Handle text message send
   const handleSendMessage = () => {

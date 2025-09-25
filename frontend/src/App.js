@@ -71,7 +71,22 @@ const handleAvatarClick = async () => {
 
       setMessages((prev) => [...prev, userMessage]);
 
-      // (Later) Send to /chat for AI response
+      // Send transcription to GPT
+      const resChat = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        body: new URLSearchParams({ prompt: data.text }),
+      });
+      const chatData = await resChat.json();
+
+      const aiResponse = {
+        id: Date.now() + 1,
+        role: "assistant",
+        content: chatData.reply,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, aiResponse]);
+
     };
 
     recorder.start();

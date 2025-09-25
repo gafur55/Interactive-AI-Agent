@@ -27,29 +27,31 @@ const App = () => {
     "Electronic music? Try Flume and ODESZA for some mind-blowing soundscapes!"
   ];
 
-  // Handle avatar click for voice recording
-  const handleAvatarClick = async () => {
-  if (isRecording) return;
-  setIsRecording(true);
+const [mediaRecorder, setMediaRecorder] = useState(null);
 
+const handleAvatarClick = async () => {
+  if (isRecording) {
+    // Stop recording
+    mediaRecorder.stop();
+    setIsRecording(false);
+    return;
+  }
+
+  // Start recording
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mediaRecorder = new MediaRecorder(stream);
+    const recorder = new MediaRecorder(stream);
     const audioChunks = [];
 
-    mediaRecorder.ondataavailable = (event) => {
+    recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
         audioChunks.push(event.data);
       }
     };
 
-    mediaRecorder.onstop = async () => {
-      setIsRecording(false);
-
-      // Convert to Blob
+    recorder.onstop = async () => {
       const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
 
-      // Send to backend /stt
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.wav');
 
@@ -59,7 +61,7 @@ const App = () => {
       });
       const data = await res.json();
 
-      // Add user transcription message
+      // Add transcription to chat
       const userMessage = {
         id: Date.now(),
         role: 'user',
@@ -69,11 +71,12 @@ const App = () => {
 
       setMessages((prev) => [...prev, userMessage]);
 
-      // TODO: send data.text to /chat next
+      // (Later) Send to /chat for AI response
     };
 
-    mediaRecorder.start();
-    setTimeout(() => mediaRecorder.stop(), 3000); // record 3 sec
+    recorder.start();
+    setMediaRecorder(recorder);
+    setIsRecording(true);
   } catch (error) {
     console.error('Error recording audio:', error);
     setIsRecording(false);

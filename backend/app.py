@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import StreamingResponse
 import openai, os, requests
 from dotenv import load_dotenv
@@ -12,11 +12,11 @@ load_dotenv()
 
 app = FastAPI()
 
+DID_API_KEY = os.getenv("DID_API_KEY")
+
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")        
-
-print("Eleven API Key loaded:", ELEVEN_API_KEY is not None)  # debug line
 
 # Init ElevenLabs client
 elevenlabs = ElevenLabs(api_key=ELEVEN_API_KEY)
@@ -87,3 +87,17 @@ async def text_to_speech(text: str = Form(...)):
 
     except Exception as e:
         return {"error": str(e)}
+    
+
+
+@app.post("/did/offer")
+async def did_offer(request: Request):
+    payload = {
+        "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png",  # 👈 replace with your face
+        "voice": "en-US_AllisonV3Voice"  # optional, can be empty since we use ElevenLabs
+    }
+    offer = await request.json()
+    url = "https://api.d-id.com/talks/streams/webrtc"
+    headers = {"Authorization": f"Basic {DID_API_KEY}"}
+    r = requests.post(url, headers=headers, json=offer)
+    return r.json()

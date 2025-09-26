@@ -98,27 +98,44 @@ const handleAvatarClick = async () => {
   }
 };
 
-  // Handle text message send
-  const handleSendMessage = () => {
-    if (!inputMessage.trim()) return;
-    
-    const userMessage = {
-      id: Date.now(),
-      role: 'user',
-      content: inputMessage,
-      timestamp: new Date()
-    };
-    
+const handleSendMessage = async () => {
+  if (!inputMessage.trim()) return;
+
+  const userMessage = {
+    id: Date.now(),
+    role: 'user',
+    content: inputMessage,
+    timestamp: new Date(),
+  };
+
+  setMessages((prev) => [...prev, userMessage]);
+  setInputMessage('');
+
+  try {
+    // Call backend /chat
+    const res = await fetch("http://localhost:8000/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ prompt: inputMessage }),
+    });
+
+    const data = await res.json();
+
     const aiResponse = {
       id: Date.now() + 1,
-      role: 'assistant',
-      content: musicResponses[Math.floor(Math.random() * musicResponses.length)],
-      timestamp: new Date()
+      role: "assistant",
+      content: data.reply || "Sorry, I couldn’t generate a reply.",
+      timestamp: new Date(),
     };
-    
-    setMessages(prev => [...prev, userMessage, aiResponse]);
-    setInputMessage('');
-  };
+
+    setMessages((prev) => [...prev, aiResponse]);
+  } catch (err) {
+    console.error("Chat error:", err);
+  }
+};
+
 
   // Handle enter key press
   const handleKeyPress = (e) => {

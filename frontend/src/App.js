@@ -42,6 +42,7 @@ const handleAvatarClick = async () => {
       const formData = new FormData();
       formData.append('file', audioBlob, 'recording.wav');
 
+      // 🔹 Step 1: Send to STT
       const res = await fetch('http://localhost:8000/stt', {
         method: 'POST',
         body: formData,
@@ -55,12 +56,12 @@ const handleAvatarClick = async () => {
         content: data.text,
         timestamp: new Date(),
       };
-
       setMessages((prev) => [...prev, userMessage]);
 
-      // Send transcription to GPT
+      // 🔹 Step 2: Send transcription to GPT
       const resChat = await fetch("http://localhost:8000/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ prompt: data.text }),
       });
       const chatData = await resChat.json();
@@ -71,17 +72,32 @@ const handleAvatarClick = async () => {
         content: chatData.reply,
         timestamp: new Date(),
       };
-
       setMessages((prev) => [...prev, aiResponse]);
 
+      // 🔹 Step 3: Convert GPT reply to speech (TTS)
+      if (chatData.reply) {
+        const ttsRes = await fetch("http://localhost:8000/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ text: chatData.reply }),
+        });
+
+        if (ttsRes.ok) {
+          const audioBlob = await ttsRes.blob();
+          const audioUrl = URL.createObjectURL(audioBlob);
+          const audio = new Audio(audioUrl);
+          audio.play(); // Assistant speaks back
+        } else {
+          console.error("TTS error:", await ttsRes.text());
+        }
+      }
     };
 
     recorder.start();
-    setMediaRecorder(recorder);
     setIsRecording(true);
-  } catch (error) {
-    console.error('Error recording audio:', error);
-    setIsRecording(false);
+    setMediaRecorder(recorder); // make sure you have mediaRecorder state
+  } catch (err) {
+    console.error("Recording error:", err);
   }
 };
 
@@ -118,6 +134,29 @@ const handleSendMessage = async () => {
     };
 
     setMessages((prev) => [...prev, aiResponse]);
+
+    // 🔊 Call /tts to generate audio for GPT reply
+    if (data.reply) {
+      const ttsRes = await fetch("http://localhost:8000/tts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ text: data.reply }),
+      });
+
+      if (!ttsRes.ok) {
+        console.error("TTS error:", await ttsRes.text());
+        return;
+      }
+
+      const audioBlob = await ttsRes.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Play audio automatically
+      const audio = new Audio(audioUrl);
+      audio.play();
+    }
   } catch (err) {
     console.error("Chat error:", err);
   }

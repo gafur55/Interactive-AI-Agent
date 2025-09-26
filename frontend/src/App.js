@@ -14,9 +14,18 @@ const App = () => {
   const [inputMessage, setInputMessage] = useState('');
 
 
-const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [currentAudio, setCurrentAudio] = useState(null);
 
 const handleAvatarClick = async () => {
+
+  // 🔹 Stop TTS if avatar is clicked
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+    setCurrentAudio(null);
+  }
+
   if (isRecording) {
     // Stop recording
     mediaRecorder.stop();
@@ -85,8 +94,18 @@ const handleAvatarClick = async () => {
         if (ttsRes.ok) {
           const audioBlob = await ttsRes.blob();
           const audioUrl = URL.createObjectURL(audioBlob);
-          const audio = new Audio(audioUrl);
-          audio.play(); // Assistant speaks back
+          // const audio = new Audio(audioUrl);
+          // audio.play(); // Assistant speaks back
+
+          if (currentAudio) {
+            currentAudio.pause();
+            currentAudio.currentTime = 0; // reset
+          }
+
+          const newAudio = new Audio(audioUrl);
+          newAudio.play();
+          setCurrentAudio(newAudio);
+
         } else {
           console.error("TTS error:", await ttsRes.text());
         }
@@ -154,8 +173,18 @@ const handleSendMessage = async () => {
       const audioUrl = URL.createObjectURL(audioBlob);
 
       // Play audio automatically
-      const audio = new Audio(audioUrl);
-      audio.play();
+      // const audio = new Audio(audioUrl);
+      // audio.play();
+
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0; // reset
+      }
+
+      const newAudio = new Audio(audioUrl);
+      newAudio.play();
+      setCurrentAudio(newAudio);
+
     }
   } catch (err) {
     console.error("Chat error:", err);

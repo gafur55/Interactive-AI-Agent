@@ -13,19 +13,6 @@ const App = () => {
   ]);
   const [inputMessage, setInputMessage] = useState('');
 
-  // Sample music responses
-  const musicResponses = [
-    "Great taste! I love that genre. Tell me more about what you're looking for!",
-    "That's awesome! I have some perfect recommendations for you.",
-    "Interesting choice! I can help you discover some amazing artists in that style.",
-    "Perfect! Let me think of some tracks that would blow your mind.",
-    "I totally get that vibe! I know exactly what you'd love.",
-    "That's one of my favorite genres too! I have so many suggestions.",
-    "Excellent! I can't wait to share some hidden gems with you.",
-    "You have great taste! I know some artists that will amaze you.",
-    "For indie rock, check out Arctic Monkeys and The Strokes - their energy is incredible!",
-    "Electronic music? Try Flume and ODESZA for some mind-blowing soundscapes!"
-  ];
 
 const [mediaRecorder, setMediaRecorder] = useState(null);
 

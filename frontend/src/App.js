@@ -220,7 +220,7 @@ const handleSendMessage = async () => {
         
         {/* Avatar Section */}
         <div className="avatar-container">
-          <DIDAvatar />
+          <DIDAvatar onClick={handleAvatarClick} isRecording={isRecording} />
         </div>
 
 

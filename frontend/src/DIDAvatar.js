@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from "react";
 
-const DIDAvatar = () => {
+const DIDAvatar = ({ onClick, isRecording = false }) => {
   const videoRef = useRef(null);
 
   useEffect(() => {
@@ -41,15 +41,30 @@ const DIDAvatar = () => {
     startAvatar();
   }, []);
 
+  const handleKeyDown = (event) => {
+    if (!onClick) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onClick();
+    }
+  };
+
   return (
-    <div style={{ display: "flex", justifyContent: "center", marginTop: "2rem" }}>
+    <div
+      className={`avatar ${isRecording ? "recording" : ""}`}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={handleKeyDown}
+    >
+      {isRecording && <div className="recording-pulse" aria-hidden="true" />}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         style={{
-          width: "400px",
-          height: "400px",
+          width: "80%",
+          height: "80%",
           background: "black",
           borderRadius: "12px",
         }}

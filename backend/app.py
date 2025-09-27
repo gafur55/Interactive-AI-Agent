@@ -1,5 +1,14 @@
+<<<<<<< HEAD
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
+=======
+import logging
+
+from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi.responses import StreamingResponse, JSONResponse
+import openai, os, requests
+from dotenv import load_dotenv
+>>>>>>> fc0a869eee26d3e89643ae469e4f0ffadb5f183c
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from io import BytesIO
@@ -18,6 +27,19 @@ ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
 
 app = FastAPI()
 
+<<<<<<< HEAD
+=======
+DID_API_KEY = os.getenv("DID_API_KEY")
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")        
+
+# Init ElevenLabs client
+elevenlabs = ElevenLabs(api_key=ELEVEN_API_KEY)
+
+# Allow React frontend (localhost:3000) to talk to FastAPI (localhost:8000)
+>>>>>>> fc0a869eee26d3e89643ae469e4f0ffadb5f183c
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -125,5 +147,52 @@ async def text_to_speech(text: str = Form(...)):
         logger.exception("TTS network error")
         raise HTTPException(status_code=502, detail=f"TTS network error: {e}")
     except Exception as e:
+<<<<<<< HEAD
         logger.exception("TTS unexpected error")
         return JSONResponse(status_code=502, content={"error": str(e)})
+=======
+        return {"error": str(e)}
+    
+
+
+@app.post("/did/offer")
+async def did_offer(request: Request):
+    payload = {
+        "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png",
+        "voice": "en-US_AllisonV3Voice",
+    }
+
+    if not DID_API_KEY:
+        logging.error("DID_API_KEY environment variable is not set")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "D-ID API key is not configured"},
+        )
+
+    offer = await request.json()
+    url = "https://api.d-id.com/talks/streams/webrtc"
+    headers = {
+        "Authorization": f"Basic {DID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {**payload, "offer": offer}
+
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logging.exception("D-ID offer request failed")
+        status_code = getattr(exc.response, "status_code", 502)
+        detail = {
+            "error": "Failed to initialize D-ID WebRTC session",
+            "details": str(exc),
+        }
+        if exc.response is not None:
+            try:
+                detail["response"] = exc.response.json()
+            except ValueError:
+                detail["response_text"] = exc.response.text
+        return JSONResponse(status_code=status_code, content=detail)
+
+    return response.json()
+>>>>>>> fc0a869eee26d3e89643ae469e4f0ffadb5f183c

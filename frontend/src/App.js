@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import DIDAvatar from './DIDAvatar';
+
 
 const App = () => {
   const [isRecording, setIsRecording] = useState(false);
@@ -14,7 +16,7 @@ const App = () => {
   const [inputMessage, setInputMessage] = useState('');
 
 
-  const [mediaRecorder, setMediaRecorder] = useState(null);
+const [mediaRecorder, setMediaRecorder] = useState(null);
   const [currentAudio, setCurrentAudio] = useState(null);
 
 const handleAvatarClick = async () => {
@@ -218,14 +220,9 @@ const handleSendMessage = async () => {
         
         {/* Avatar Section */}
         <div className="avatar-container">
-          <div 
-            className={`avatar ${isRecording ? 'recording' : ''}`}
-            onClick={handleAvatarClick}
-          >
-            🎧
-            {isRecording && <div className="recording-pulse"></div>}
-          </div>
+          <DIDAvatar onClick={handleAvatarClick} isRecording={isRecording} />
         </div>
+
 
         {/* Voice Status */}
         <div className={`voice-status ${isRecording ? 'listening' : ''}`}>

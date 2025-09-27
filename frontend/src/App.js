@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import DIDAvatar from "/home/gafur/Documents/AI avatar creation here/frontend/src/DIDAvatar.js";
+import DIDAvatar from './DIDAvatar';
 
 
 const App = () => {

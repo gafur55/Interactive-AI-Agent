@@ -1,5 +1,7 @@
+import logging
+
 from fastapi import FastAPI, UploadFile, File, Form, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import openai, os, requests
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
@@ -93,11 +95,40 @@ async def text_to_speech(text: str = Form(...)):
 @app.post("/did/offer")
 async def did_offer(request: Request):
     payload = {
-        "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png",  # 👈 replace with your face
-        "voice": "en-US_AllisonV3Voice"  # optional, can be empty since we use ElevenLabs
+        "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png",
+        "voice": "en-US_AllisonV3Voice",
     }
+
+    if not DID_API_KEY:
+        logging.error("DID_API_KEY environment variable is not set")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "D-ID API key is not configured"},
+        )
+
     offer = await request.json()
     url = "https://api.d-id.com/talks/streams/webrtc"
-    headers = {"Authorization": f"Basic {DID_API_KEY}"}
-    r = requests.post(url, headers=headers, json=offer)
-    return r.json()
+    headers = {
+        "Authorization": f"Basic {DID_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    body = {**payload, "offer": offer}
+
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logging.exception("D-ID offer request failed")
+        status_code = getattr(exc.response, "status_code", 502)
+        detail = {
+            "error": "Failed to initialize D-ID WebRTC session",
+            "details": str(exc),
+        }
+        if exc.response is not None:
+            try:
+                detail["response"] = exc.response.json()
+            except ValueError:
+                detail["response_text"] = exc.response.text
+        return JSONResponse(status_code=status_code, content=detail)
+
+    return response.json()

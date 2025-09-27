@@ -7,6 +7,7 @@ from io import BytesIO
 from elevenlabs.client import ElevenLabs
 import openai
 import os
+import base64
 import json
 import requests
 import logging
@@ -17,7 +18,8 @@ import logging
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
-DID_API_KEY = os.getenv("DID_API_KEY")
+# DID_API_KEY = os.getenv("DID_API_KEY")
+HEYGEN_API_KEY = os.getenv("HEYGEN_API_KEY")
 
 openai.api_key = OPENAI_API_KEY
 
@@ -154,48 +156,207 @@ async def text_to_speech(text: str = Form(...)):
 # ---------------------------
 # D-ID WebRTC Offer Proxy
 # ---------------------------
-@app.post("/did/offer")
-async def did_offer(request: Request):
-    """
-    Forwards a WebRTC SDP offer to D-ID and returns their answer.
-    Expects the frontend to POST the SDP offer JSON body here.
-    """
-    payload_defaults = {
-        "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png",
-        "voice": "en-US_AllisonV3Voice",
-    }
 
-    if not DID_API_KEY:
-        logger.error("DID_API_KEY not set")
-        return JSONResponse(status_code=500, content={"error": "D-ID API key is not configured"})
+# @app.post("/did/offer")
+# async def did_offer(request: Request):
+#     if not DID_API_KEY:
+#         logger.error("D-ID API key missing")
+#         return JSONResponse(status_code=500, content={"error": "D-ID API key missing"})
 
+#     try:
+#         offer = await request.json()
+#         logger.info(f"Received offer: {offer}")
+#     except Exception as e:
+#         logger.error(f"Invalid JSON body: {e}")
+#         raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+#     if "sdp" not in offer or "type" not in offer:
+#         logger.error(f"Missing SDP or type in offer: {offer}")
+#         raise HTTPException(status_code=400, detail="Missing SDP or type")
+
+#     # D-ID API key needs Base64 encoding for Basic auth
+#     encoded_key = base64.b64encode(DID_API_KEY.encode()).decode()
+#     headers = {
+#         "Authorization": f"Basic {encoded_key}",
+#         "Content-Type": "application/json"
+#     }
+
+#     # STEP 1: Create a new stream WITH source_url
+#     create_url = "https://api.d-id.com/talks/streams"
+#     create_body = {
+#         "source_url": "https://raw.githubusercontent.com/gafur55/Interactive-AI-Agent/main/avatar.png"
+#     }
+    
+#     logger.info(f"Creating D-ID stream with body: {create_body}")
+#     logger.info(f"Using headers: {dict(headers)}")  # Don't log the actual API key
+    
+#     try:
+#         create_resp = requests.post(create_url, headers=headers, json=create_body, timeout=30)
+#         logger.info(f"D-ID stream creation response: Status={create_resp.status_code}")
+#         logger.info(f"D-ID stream creation response body: {create_resp.text}")
+#     except requests.RequestException as e:
+#         logger.error(f"Network error creating stream: {e}")
+#         return JSONResponse(status_code=502, content={"error": "Network error creating stream"})
+
+#     if create_resp.status_code != 201:
+#         logger.error(f"Stream creation failed: {create_resp.status_code} - {create_resp.text}")
+#         return JSONResponse(
+#             status_code=create_resp.status_code,
+#             content={"error": "Failed to create stream", "details": create_resp.text},
+#         )
+
+#     try:
+#         stream = create_resp.json()
+#         logger.info(f"Stream created successfully: {stream}")
+#     except json.JSONDecodeError as e:
+#         logger.error(f"Invalid JSON in stream response: {e}")
+#         return JSONResponse(status_code=500, content={"error": "Invalid JSON from D-ID API"})
+
+#     stream_id = stream.get("id")
+#     if not stream_id:
+#         logger.error(f"No stream_id in response: {stream}")
+#         return JSONResponse(status_code=500, content={"error": "No stream_id returned", "details": stream})
+
+#     # STEP 2: Send SDP offer with session_id
+#     sdp_url = f"https://api.d-id.com/talks/streams/{stream_id}/sdp"
+    
+#     # Extract session_id from the stream response
+#     session_id = stream.get("session_id", "")
+    
+#     # Add session_id to headers
+#     sdp_headers = headers.copy()
+#     if session_id:
+#         sdp_headers["Cookie"] = session_id
+#         logger.info(f"Added session_id cookie: {session_id[:50]}...")  # Log first 50 chars
+    
+#     sdp_body = {
+#         "answer": {  # D-ID expects "answer" for the SDP response
+#             "sdp": offer["sdp"],
+#             "type": offer["type"]
+#         }
+#     }
+
+#     logger.info(f"Sending SDP to {sdp_url} with body: {sdp_body}")
+#     logger.info(f"SDP headers: {dict(sdp_headers)}")
+
+#     try:
+#         sdp_resp = requests.post(sdp_url, headers=sdp_headers, json=sdp_body, timeout=30)
+#         logger.info(f"SDP response: Status={sdp_resp.status_code}")
+#         logger.info(f"SDP response body: {sdp_resp.text}")
+#     except requests.RequestException as e:
+#         logger.error(f"Network error sending SDP: {e}")
+#         return JSONResponse(status_code=502, content={"error": "Network error sending SDP"})
+
+#     if sdp_resp.status_code != 200:
+#         logger.error(f"SDP submission failed: {sdp_resp.status_code} - {sdp_resp.text}")
+#         return JSONResponse(
+#             status_code=sdp_resp.status_code,
+#             content={"error": "Failed to send SDP", "details": sdp_resp.text},
+#         )
+
+#     try:
+#         sdp_result = sdp_resp.json()
+#         logger.info(f"SDP successful: {sdp_result}")
+#     except json.JSONDecodeError as e:
+#         logger.error(f"Invalid JSON in SDP response: {e}")
+#         return JSONResponse(status_code=500, content={"error": "Invalid JSON from D-ID SDP API"})
+
+#     return {
+#         "stream_id": stream_id,
+#         "answer": sdp_result
+#     }
+
+
+
+
+
+
+
+
+#-----------------------
+# Heygen API Usage
+# ----------------------
+
+@app.post("/heygen/avatar")
+async def heygen_avatar(request: Request):
+    # Send text/avatar/voice request to HeyGen and get a video_id
+
+    if not HEYGEN_API_KEY:
+        raise HTTPException(status_code=500, detail="HEYGEN_API_KEY missing")
+    
     try:
-        offer = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body for offer")
+        body = await request.json()
+        url = "https://api.heygen.com/v2/video/generate"
 
-    url = "https://api.d-id.com/talks/streams/webrtc"
-    headers = {
-        "Authorization": f"Basic {DID_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    body = {**payload_defaults, "offer": offer}
-
-    try:
-        resp = requests.post(url, headers=headers, json=body, timeout=30)
-        resp.raise_for_status()
-        # Return D-ID's JSON (answer, etc.)
-        return resp.json()
-    except requests.RequestException as exc:
-        logger.exception("D-ID offer request failed")
-        status_code = getattr(exc.response, "status_code", 502)
-        detail = {
-            "error": "Failed to initialize D-ID WebRTC session",
-            "details": str(exc),
+        headers = {
+            "X-Api-Key": HEYGEN_API_KEY,
+            "Content-Type": "application/json"
         }
-        if exc.response is not None:
-            try:
-                detail["response"] = exc.response.json()
-            except ValueError:
-                detail["response_text"] = exc.response.text
-        return JSONResponse(status_code=status_code, content=detail)
+
+        r = requests.post(url, headers=headers, json=body, timeout=60)
+        r.raise_for_status()
+
+        return r.json()
+    except requests.RequestException as e:
+        logger.error(f"HeyGen generate error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+
+@app.get("/heygen/status/{video_id}")
+async def heygen_status(video_id: str):
+    # Check HeyGen video rendering status
+
+    url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
+
+    headers = {"X-Api-Key": HEYGEN_API_KEY}
+
+    try:
+        r = requests.get(url, headers=headers, timeout=30)
+        r.raise_for_status()
+        return r.json()  # HeyGen returns { "error": null, "data": { "status": ..., "video_url": ... } }
+    
+    except requests.RequestException as e:
+        logger.error(f"HeyGen status error: {e}")
+        return JSONResponse(status_code=502, content={"error": str(e)})
+
+
+
+@app.get("/heygen/download/{video_id}")
+async def heygen_download(video_id: str):
+    # Download finished video from HeyGen to local file
+
+    status_url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
+    headers = {"X-Api-Key": HEYGEN_API_KEY}
+
+
+    try:
+        # checking the status of the url    
+        r = requests.get(status_url, headers=headers, timeout=30)
+        r.raise_for_status()
+        data = r.json()["data"]
+
+        if data.get("status") != "completed":
+            return {"message": f"Video not ready yet, status: {data.get('status')}"}
+        
+        video_url = data.get("video_url")
+        if not video_url:
+            return {"error": "No video_url in HeyGen response"}
+        
+        video_resp = requests.get(video_url, stream=True)
+        video_resp.raise_for_status()
+
+
+        filename = f"heygen_{video_id}.mp4"
+        filepath = os.path.join(os.getcwd(), filename)
+
+        with open(filepath, "wb") as f:
+            for chunk in video_resp.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        return {"message": "Video downloaded", "file": filepath}
+    
+    except Exception as e:
+        logger.error(f"HeyGen download error: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})

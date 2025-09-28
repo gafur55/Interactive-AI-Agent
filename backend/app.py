@@ -466,20 +466,25 @@ class HedoraText(BaseModel):
 @app.post("/chat_from_hedora_text")
 def chat_from_hedora_text(body: HedoraText):
     prompt = f"""
-You are a friendly conversational assistant.
+    You are a friendly conversational assistant **with a love for music**.
 
-Below is a paragraph that describes the mood of a photo.
+    Below is a paragraph that describes the mood of a photo.
 
-Your task:
-- Rewrite it as if you’re casually speaking to the person in the photo.
-- Keep it warm, natural, and brief (1–2 sentences).
-- Do not repeat every detail; just capture the feeling and gently invite conversation.
+    Your task:
+    - Speak **directly to the person in the photo**—start with their name if provided,
+    or use a warm greeting like “Hey there!” or “Hi friend!” before the main thought.
+    - Keep it relaxed and natural (1–2 sentences).
+    - **Bring the chat back to music**—relate the mood to a rhythm, melody, playlist,
+    or invite them to share what they’re listening to.
+    - Avoid repeating every detail; just capture the vibe and spark a music-centered conversation.
 
-Mood paragraph:
-{body.hedora_text}
+    Mood paragraph:
+    {body.hedora_text}
 
-Return only the conversational message.
-""".strip()
+    Return only the conversational message.
+    """.strip()
+
+
 
     try:
         response = openai.chat.completions.create(

@@ -21,6 +21,18 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState("");
 
+  function addMessage(role, content) {
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        role,
+        content,
+        timestamp: new Date(),
+      },
+    ]);
+  }
+
   // --- Background video: mute/unmute only (never pause) ---
   const bgVideoRef = useRef(null);
   const muteBg = () => { const v = bgVideoRef.current; if (v) v.muted = true; };
@@ -39,7 +51,7 @@ export default function App() {
         // ✅ Only runs when the Talk button is NOT recording
         callMyMethod();
       }
-    }, 30000); // 30s
+    }, 40000); // 30s
 
     return () => clearInterval(interval);
   }, [isRecording]); // depend on isRecording so it always knows current state
@@ -76,7 +88,9 @@ export default function App() {
       const { reply } = await chatRes.json();
       console.log("💬 reply:", reply);
 
-    if (reply) {
+      addMessage("assistant", reply);
+
+      if (reply) {
         const ttsRes = await fetch(`${API_BASE}/tts`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },

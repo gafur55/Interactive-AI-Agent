@@ -1,21 +1,15 @@
 // App.js
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import avatarPng from "./assets/avatar.png";
 
 const API_BASE = "http://localhost:8000";
-// Paste your Talking Photo "Copy Avatar ID" here:
-const TALKING_PHOTO_ID = "7f5acbb81e684f6c94e645f12206648d";
+const TALKING_PHOTO_ID = "af5820d3e6bb42609e4782cc89db0aee"; // <- your talking photo ID
 
 export default function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [messages, setMessages] = useState([
-    {
-      id: 1,
-      role: "assistant",
-      content: "Hello! I'm DJ Nova. Tap me to start talking!",
-      timestamp: new Date(),
-    },
+    { id: 1, role: "assistant", content: "Hello! I'm DJ Nova. Tap me to start talking!", timestamp: new Date() },
   ]);
   const [inputMessage, setInputMessage] = useState("");
 
@@ -24,155 +18,181 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // --- Helpers ---
-  const latestAssistantText = () => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant" && messages[i].content?.trim()) {
-        return messages[i].content;
+  // live avatar state
+  const [videoSrc, setVideoSrc] = useState("");
+  const [videoMuted, setVideoMuted] = useState(false);
+  const [isVideoLive, setIsVideoLive] = useState(false);
+
+  const pollRef = useRef(null);
+  const videoRef = useRef(null);
+
+  useEffect(() => () => pollRef.current && clearInterval(pollRef.current), []);
+
+  // autoplay video (audio first, then muted fallback)
+  useEffect(() => {
+    if (!videoSrc) return;
+    const v = videoRef.current;
+    if (!v) return;
+
+    const tryPlay = async () => {
+      try {
+        v.muted = false;
+        setVideoMuted(false);
+        await v.play();
+      } catch {
+        try {
+          v.muted = true;
+          setVideoMuted(true);
+          await v.play();
+        } catch {
+          /* user interaction may be required */
+        }
       }
-    }
-    return "";
-  };
+    };
+    const t = setTimeout(() => tryPlay(), 50);
+    return () => clearTimeout(t);
+  }, [videoSrc]);
+
+  const safeJson = async (res) => { try { return await res.json(); } catch { return null; } };
 
   const playAudioBlob = async (blob) => {
     const url = URL.createObjectURL(blob);
-    if (currentAudio) {
-      try {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-      } catch {}
-    }
+    if (currentAudio) { try { currentAudio.pause(); currentAudio.currentTime = 0; } catch {} }
     const audio = new Audio(url);
     audio.onended = () => setCurrentAudio(null);
-    try {
-      await audio.play();
-    } catch {}
+    try { await audio.play(); } catch {}
     setCurrentAudio(audio);
   };
 
-  // --- Record mic -> STT -> Chat -> TTS -> HeyGen (auto) ---
-  const handleAvatarClick = async () => {
-    // Stop current TTS if playing
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio.currentTime = 0;
-      setCurrentAudio(null);
-    }
+  const resetTile = () => {
+    setVideoSrc("");
+    setVideoMuted(false);
+    setIsVideoLive(false);
+    setError("");
+  };
 
-    // Stop recording if already recording
+  // ---------------- HeyGen: create job -> poll -> stream ----------------
+  const startHeyGenRender = async (text) => {
+    try {
+      setError("");
+      setVideoSrc("");
+      setIsVideoLive(false);
+
+      const fd = new FormData();
+      fd.append("input_text", text);
+      fd.append("talking_photo_id", TALKING_PHOTO_ID);
+
+      const genRes = await fetch(`${API_BASE}/heygen/generate`, { method: "POST", body: fd });
+      if (!genRes.ok) {
+        const j = await safeJson(genRes);
+        throw new Error(j?.error || `Generate failed (${genRes.status})`);
+      }
+      const { video_id } = await genRes.json();
+      if (!video_id) throw new Error("No video_id returned");
+
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const sRes = await fetch(`${API_BASE}/heygen/status?video_id=${encodeURIComponent(video_id)}`);
+          const sJson = await sRes.json();
+          const st = sJson?.data?.status;
+          if (!st) return;
+          if (st === "completed") {
+            setVideoSrc(`${API_BASE}/heygen/stream?video_id=${encodeURIComponent(video_id)}`);
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          } else if (st === "failed") {
+            const msg = sJson?.data?.error || "Unknown generation failure";
+            throw new Error(msg);
+          }
+        } catch (e) {
+          console.error("Status poll error:", e);
+          setError(e?.message || "HeyGen status failed.");
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }, 2500);
+    } catch (e) {
+      console.error("startHeyGenRender error:", e);
+      setError(e?.message || "HeyGen render failed.");
+    }
+  };
+
+  // ---------- shared record flow ----------
+  const runRecordFlow = async (audioChunks) => {
+    try {
+      setIsBusy(true); setError("");
+
+      // STT
+      const fd = new FormData();
+      fd.append("file", new Blob(audioChunks, { type: "audio/wav" }), "recording.wav");
+      const sttRes = await fetch(`${API_BASE}/stt`, { method: "POST", body: fd });
+      const stt = await sttRes.json();
+      const userText = stt.text || "";
+      setMessages((m) => [...m, { id: Date.now(), role: "user", content: userText, timestamp: new Date() }]);
+
+      // Chat
+      const chatRes = await fetch(`${API_BASE}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ prompt: userText }),
+      });
+      const chat = await chatRes.json();
+      const aiText = chat.reply || "Sorry, I couldn’t generate a reply.";
+      setMessages((m) => [...m, { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() }]);
+
+      // Optional: TTS
+      // const ttsRes = await fetch(`${API_BASE}/tts`, {
+      //   method: "POST",
+      //   headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      //   body: new URLSearchParams({ text: aiText }),
+      // });
+      // if (ttsRes.ok) playAudioBlob(await ttsRes.blob());
+
+      if (aiText) await startHeyGenRender(aiText);
+    } catch (err) {
+      console.error("Voice flow error:", err);
+      setError(err?.message || "Something went wrong in voice flow.");
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  // ---------- Avatar click (kept): unmute video if showing; otherwise toggle mic ----------
+  const handleAvatarClick = async () => {
+    // If a video is up and might be paused by autoplay policy, use click to unmute/play it.
+    if (videoSrc) {
+      const v = videoRef.current;
+      if (v) {
+        try { v.muted = false; setVideoMuted(false); await v.play(); } catch {}
+      }
+      return;
+    }
+    // else: behave like mic toggle
+    await toggleMic();
+  };
+
+  // ---------- NEW: mic button toggle ----------
+  const toggleMic = async () => {
+    // stop current TTS if playing
+    if (currentAudio) { currentAudio.pause(); currentAudio.currentTime = 0; setCurrentAudio(null); }
+
+    // stop recording if already running
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
       return;
     }
 
-    // Start recording
+    // start a new recording
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
       const chunks = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.onstop = async () => {
-        try {
-          setIsBusy(true);
-          setError("");
-
-          // 1) STT
-          const audioBlob = new Blob(chunks, { type: "audio/wav" });
-          const fd = new FormData();
-          fd.append("file", audioBlob, "recording.wav");
-
-          const sttRes = await fetch(`${API_BASE}/stt`, { method: "POST", body: fd });
-          const sttJson = await sttRes.json();
-
-          const userText = sttJson.text || "";
-          const userMsg = { id: Date.now(), role: "user", content: userText, timestamp: new Date() };
-          setMessages((prev) => [...prev, userMsg]);
-
-          // 2) Chat
-          const chatRes = await fetch(`${API_BASE}/chat`, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ prompt: userText }),
-          });
-          const chatJson = await chatRes.json();
-
-          const aiText = chatJson.reply || "Sorry, I couldn’t generate a reply.";
-          const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
-          setMessages((prev) => [...prev, aiMsg]);
-
-          // // 3) TTS (play assistant message)
-          // if (aiText) {
-          //   const ttsRes = await fetch(`${API_BASE}/tts`, {
-          //     method: "POST",
-          //     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          //     body: new URLSearchParams({ text: aiText }),
-          //   });
-          //   if (!ttsRes.ok) {
-          //     console.error("TTS error:", await ttsRes.text());
-          //   } else {
-          //     const audioBlob2 = await ttsRes.blob();
-          //     await playAudioBlob(audioBlob2);
-          //   }
-          // }
-
-          // 4) HeyGen render & download (auto)
-          if (aiText) {
-            try {
-              const hfd = new FormData();
-              hfd.append("input_text", aiText);
-              hfd.append("talking_photo_id", TALKING_PHOTO_ID); // your avatar
-              const suggestedName = `vivian_${Date.now()}.mp4`;
-              hfd.append("filename", suggestedName);
-
-              const hres = await fetch(`${API_BASE}/heygen/generate_and_download`, {
-                method: "POST",
-                body: hfd,
-              });
-
-              const ct = hres.headers.get("content-type") || "";
-              if (!hres.ok || ct.includes("application/json")) {
-                let detail = "";
-                try {
-                  const j = await hres.json();
-                  detail = j.error || JSON.stringify(j).slice(0, 400);
-                } catch {}
-                throw new Error(`HeyGen error ${hres.status}: ${detail || "Unknown error"}`);
-              }
-
-              const blob = await hres.blob();
-              let downloadName = suggestedName;
-              const dispo = hres.headers.get("Content-Disposition");
-              if (dispo) {
-                const m = /filename="?([^"]+)"?/i.exec(dispo);
-                if (m && m[1]) downloadName = m[1];
-              }
-
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = url;
-              a.download = downloadName;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              URL.revokeObjectURL(url);
-            } catch (e) {
-              console.error("HeyGen auto-download failed:", e);
-              setError(e?.message || "HeyGen video failed.");
-            }
-          }
-        } catch (err) {
-          console.error("Voice flow error:", err);
-          setError(err?.message || "Something went wrong in voice flow.");
-        } finally {
-          setIsBusy(false);
-        }
+        await runRecordFlow(chunks);
       };
-
       recorder.start();
       setIsRecording(true);
       setMediaRecorder(recorder);
@@ -182,93 +202,23 @@ export default function App() {
     }
   };
 
-  // --- Type -> Chat -> TTS -> HeyGen (auto) ---
+  // ---------- Typed path ----------
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
-
-    const userMsg = { id: Date.now(), role: "user", content: inputMessage, timestamp: new Date() };
-    setMessages((prev) => [...prev, userMsg]);
-
     const prompt = inputMessage;
     setInputMessage("");
-
+    setMessages((m) => [...m, { id: Date.now(), role: "user", content: prompt, timestamp: new Date() }]);
     try {
-      setIsBusy(true);
-      setError("");
-
-      // Chat
+      setIsBusy(true); setError("");
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ prompt }),
       });
       const data = await res.json();
-
       const aiText = data.reply || "Sorry, I couldn’t generate a reply.";
-      const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
-      setMessages((prev) => [...prev, aiMsg]);
-
-      // TTS
-      if (aiText) {
-        const ttsRes = await fetch(`${API_BASE}/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ text: aiText }),
-        });
-
-        if (ttsRes.ok) {
-          const audioBlob = await ttsRes.blob();
-          await playAudioBlob(audioBlob);
-        } else {
-          console.error("TTS error:", await ttsRes.text());
-        }
-      }
-
-      // HeyGen render & download (auto)
-      if (aiText) {
-        try {
-          const hfd = new FormData();
-          hfd.append("input_text", aiText);
-          hfd.append("talking_photo_id", TALKING_PHOTO_ID); // your avatar
-          const suggestedName = `vivian_${Date.now()}.mp4`;
-          hfd.append("filename", suggestedName);
-
-          const hres = await fetch(`${API_BASE}/heygen/generate_and_download`, {
-            method: "POST",
-            body: hfd,
-          });
-
-          const ct = hres.headers.get("content-type") || "";
-          if (!hres.ok || ct.includes("application/json")) {
-            let detail = "";
-            try {
-              const j = await hres.json();
-              detail = j.error || JSON.stringify(j).slice(0, 400);
-            } catch {}
-            throw new Error(`HeyGen error ${hres.status}: ${detail || "Unknown error"}`);
-          }
-
-          const blob = await hres.blob();
-          let downloadName = suggestedName;
-          const dispo = hres.headers.get("Content-Disposition");
-          if (dispo) {
-            const m = /filename="?([^"]+)"?/i.exec(dispo);
-            if (m && m[1]) downloadName = m[1];
-          }
-
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = downloadName;
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-          URL.revokeObjectURL(url);
-        } catch (e) {
-          console.error("HeyGen auto-download failed:", e);
-          setError(e?.message || "HeyGen video failed.");
-        }
-      }
+      setMessages((m) => [...m, { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() }]);
+      await startHeyGenRender(aiText);
     } catch (err) {
       console.error("Chat error:", err);
       setError(err?.message || "Chat failed.");
@@ -277,70 +227,72 @@ export default function App() {
     }
   };
 
-  const handleKeyPress = (e) => {
-    if (e.key === "Enter") handleSendMessage();
-  };
+  // video events
+  const onVideoPlaying = () => setIsVideoLive(true);
+  const onVideoWaiting  = () => setIsVideoLive(false);
+  const onVideoEndedOrError = () => resetTile();
+
+  const handleKeyPress = (e) => { if (e.key === "Enter") handleSendMessage(); };
 
   const clearChat = () => {
-    setMessages([
-      {
-        id: 1,
-        role: "assistant",
-        content: "Hello! I'm DJ Nova. Tap me to start talking!",
-        timestamp: new Date(),
-      },
-    ]);
-    setError("");
+    resetTile();
+    setMessages([{ id: 1, role: "assistant", content: "Hello! I'm DJ Nova. Tap me to start talking!", timestamp: new Date() }]);
   };
 
   return (
     <div className="app">
-      {/* Main Content */}
       <div className={`main-content ${isChatOpen ? "chat-open" : ""}`}>
-        {/* Avatar Section (no mouth sync) */}
-        <div className="avatar-container" style={{ position: "relative" }}>
-          <div onClick={handleAvatarClick} style={{ cursor: "pointer" }}>
-            <img
-              src={avatarPng}
-              alt="avatar"
-              style={{
-                width: 420,
-                height: 420,
-                borderRadius: 12,
-                objectFit: "cover",
-                display: "block",
-                boxShadow: "0 20px 60px rgba(0,0,0,.35)",
-                userSelect: "none",
-              }}
-              draggable={false}
+
+        {/* AVATAR TILE */}
+        <div className="avatar-box" onClick={handleAvatarClick}>
+          {/* Video below */}
+          {videoSrc && (
+            <video
+              key={videoSrc}
+              ref={videoRef}
+              src={videoSrc}
+              autoPlay
+              playsInline
+              muted={videoMuted}
+              preload="auto"
+              onPlaying={onVideoPlaying}
+              onWaiting={onVideoWaiting}
+              onEnded={onVideoEndedOrError}
+              onError={onVideoEndedOrError}
+              className={`avatar-media ${isVideoLive ? "video-visible" : "video-hidden"}`}
             />
-          </div>
+          )}
+          {/* Cover image on top until video actually plays */}
+          <img
+            src={avatarPng}
+            alt="avatar"
+            className={`avatar-media cover ${isVideoLive ? "cover-hide" : "cover-show"}`}
+            draggable={false}
+          />
         </div>
 
-        {/* Voice Status */}
-        <div className={`voice-status ${isRecording ? "listening" : ""}`}>
-          {isRecording ? <>🎤 Listening... Speak now!</> : <>🎵 Tap the avatar to start talking!</>}
+        {/* NEW: Mic button under the avatar */}
+        <div className="mic-row" aria-live="polite">
+          <button
+            className={`mic-btn ${isRecording ? "recording" : ""}`}
+            onClick={toggleMic}
+            disabled={isBusy}
+          >
+            {isRecording ? "● Listening… Tap to stop" : "🎤 Tap to talk"}
+          </button>
         </div>
 
-        {error && (
-          <div style={{ marginTop: 10, color: "#ffb3b3" }}>
-            ⚠️ {error}
-          </div>
-        )}
+        {error && <div style={{ marginTop: 12, color: "#ffb3b3" }}>⚠️ {error}</div>}
       </div>
 
-      {/* Chat Toggle Button */}
-      <div className="chat-toggle" onClick={() => setIsChatOpen(!isChatOpen)}>
-        💬
-      </div>
+      {/* Chat Toggle */}
+      <div className="chat-toggle" onClick={() => setIsChatOpen(!isChatOpen)}>💬</div>
 
       {/* Chat Sidebar */}
       <div className={`chat-sidebar ${isChatOpen ? "open" : ""}`}>
         <div className="chat-header">
           <h3>🎵 Chat with DJ Nova</h3>
-          <button className="close-btn" onClick={() => setIsChatOpen(false)}>
-            ×
-          </button>
+          <button className="close-btn" onClick={() => setIsChatOpen(false)}>×</button>
         </div>
 
         <div className="chat-messages">
@@ -354,69 +306,81 @@ export default function App() {
 
         <div className="chat-input-container">
           <input
+            className="chat-input"
             type="text"
             value={inputMessage}
             onChange={(e) => setInputMessage(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Type your message..."
-            className="chat-input"
           />
-        <button onClick={handleSendMessage} className="send-btn" disabled={isBusy}>
-            ➤
-          </button>
-        </div>
-
-        <div className="chat-stats">
-          <p>Messages: {messages.length}</p>
-          <p>Status: {isBusy ? "🟡 Working" : "🟢 Online"}</p>
-          <button onClick={clearChat} className="clear-btn">
-            🗑️ Clear Chat
-          </button>
+          <button className="send-btn" onClick={handleSendMessage} disabled={isBusy}>➤</button>
+          <button className="clear-btn" onClick={clearChat}>🗑️ Clear</button>
         </div>
       </div>
 
       {/* Styles */}
       <style jsx>{`
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        .app {
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-          min-height: 100vh; color: white; overflow-x: hidden; position: relative;
+        *{margin:0;padding:0;box-sizing:border-box}
+        .app{font-family:system-ui,-apple-system,Segoe UI,Roboto; background:linear-gradient(135deg,#1a1a2e,#16213e 50%,#0f3460); min-height:100vh; color:#fff}
+        .main-content{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:2rem}
+        .chat-open{margin-right:400px}
+
+        .avatar-box{
+          position:relative;
+          width:420px; height:420px;
+          border-radius:12px; overflow:hidden;
+          box-shadow:0 20px 60px rgba(0,0,0,.35);
+          background:rgba(255,255,255,.04);
+          cursor:pointer;
         }
-        .main-content { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; transition: margin-right 0.3s ease; padding: 2rem; }
-        .main-content.chat-open { margin-right: 400px; }
-        .avatar-container { display: flex; align-items: center; justify-content: center; margin-bottom: 1rem; }
-        .voice-status { background: rgba(74, 222, 128, 0.9); color: white; padding: 12px 24px; border-radius: 30px; font-size: 1rem; font-weight: 500; backdrop-filter: blur(10px); animation: bounce 2s ease-in-out infinite; text-align: center; box-shadow: 0 4px 20px rgba(74, 222, 128, 0.3); }
-        .voice-status.listening { background: rgba(239, 68, 68, 0.9); animation: pulse-status 1s ease-in-out infinite; }
-        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
-        @keyframes pulse-status { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.05); opacity: 0.8; } }
-        .chat-toggle {
-          position: fixed; top: 50%; right: 0; transform: translateY(-50%);
-          background: rgba(102, 126, 234, 0.9); color: white; border: none; border-radius: 30px 0 0 30px;
-          width: 60px; height: 120px; cursor: pointer; font-size: 24px; transition: all 0.3s ease;
-          box-shadow: -4px 0 20px rgba(102, 126, 234, 0.4); backdrop-filter: blur(10px); display: flex; align-items: center; justify-content: center; z-index: 1001; user-select: none;
+        .avatar-media{
+          width:100%; height:100%;
+          object-fit:cover; display:block;
+          background:#000;
+          position:absolute; inset:0;
         }
-        .chat-toggle:hover { width: 80px; background: #667eea; box-shadow: -6px 0 25px rgba(102, 126, 234, 0.6); transform: translateY(-50%) translateX(-10px); }
-        .chat-sidebar { position: fixed; top: 0; right: -400px; width: 400px; height: 100vh; background: rgba(26, 26, 46, 0.95); backdrop-filter: blur(20px); transition: right 0.3s ease; z-index: 1000; border-left: 1px solid rgba(255, 255, 255, 0.1); display: flex; flex-direction: column; }
-        .chat-sidebar.open { right: 0; }
-        .chat-header { padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); display: flex; justify-content: space-between; align-items: center; background: rgba(102, 126, 234, 0.1); }
-        .chat-messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
-        .message { padding: 12px 16px; border-radius: 18px; font-size: 0.9rem; line-height: 1.4; animation: slideIn 0.3s ease; max-width: 80%; }
-        .message.user { background: linear-gradient(45deg, #667eea, #764ba2); color: white; align-self: flex-end; border-bottom-right-radius: 5px; }
-        .message.assistant { background: rgba(255, 255, 255, 0.1); color: white; align-self: flex-start; border: 1px solid rgba(255, 255, 255, 0.1); border-bottom-left-radius: 5px; }
-        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .chat-input-container { padding: 20px; border-top: 1px solid rgba(255, 255, 255, 0.1); display: flex; gap: 10px; }
-        .chat-input { flex: 1; background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 25px; padding: 12px 20px; color: white; font-size: 0.9rem; outline: none; transition: border-color 0.3s ease; }
-        .chat-input::placeholder { color: rgba(255, 255, 255, 0.5); }
-        .chat-input:focus { border-color: #667eea; }
-        .send-btn { background: #667eea; border: none; color: white; padding: 10px 16px; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s ease; font-size: 14px; font-weight: 600; }
-        .send-btn:hover { background: #5a67d8; transform: translateY(-1px); }
-        .clear-btn { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.3); padding: 8px 12px; border-radius: 10px; cursor: pointer; }
-        .chat-stats { padding: 15px 20px; border-top: 1px solid rgba(255, 255, 255, 0.1); font-size: 0.85rem; color: rgba(255, 255, 255, 0.7); }
-        @media (max-width: 768px) {
-          .main-content.chat-open { margin-right: 0; }
-          .chat-sidebar { width: 100vw; right: -100vw; }
+        .video-hidden{opacity:0; transition:opacity .18s ease-out; pointer-events:none;}
+        .video-visible{opacity:1; transition:opacity .18s ease-out;}
+        .cover-show{opacity:1; transition:opacity .18s ease-in;}
+        .cover-hide{opacity:0; transition:opacity .18s ease-in; pointer-events:none;}
+
+        .mic-row{margin-top:12px}
+        .mic-btn{
+          background:#22c55e; color:#0b111e;
+          border:none; padding:10px 18px; border-radius:999px;
+          font-weight:800; letter-spacing:.2px; cursor:pointer;
+          box-shadow:0 8px 24px rgba(34,197,94,.25);
+          transition:transform .08s ease, box-shadow .2s ease, background .2s ease;
         }
+        .mic-btn:hover{transform:translateY(-1px); box-shadow:0 10px 30px rgba(34,197,94,.35)}
+        .mic-btn:active{transform:translateY(0)}
+        .mic-btn.recording{
+          background:#ef4444; color:#fff;
+          box-shadow:0 0 0 0 rgba(239,68,68,.6);
+          animation:pulse 1s infinite;
+        }
+        @keyframes pulse{
+          0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)}
+          70%{box-shadow:0 0 0 14px rgba(239,68,68,0)}
+          100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}
+        }
+
+        .chat-toggle{position:fixed;top:50%;right:0;transform:translateY(-50%);
+          background:rgba(102,126,234,.9);color:#fff;border-radius:30px 0 0 30px;
+          width:60px;height:120px;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:-4px 0 20px rgba(102,126,234,.4)}
+
+        .chat-sidebar{position:fixed;top:0;right:-400px;width:400px;height:100vh;background:rgba(26,26,46,.95);
+          transition:right .3s;display:flex;flex-direction:column;border-left:1px solid rgba(255,255,255,.1)}
+        .chat-sidebar.open{right:0}
+        .chat-header{padding:20px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;align-items:center}
+        .chat-messages{flex:1;padding:20px;overflow-y:auto;display:flex;flex-direction:column;gap:12px}
+        .message{padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.08)}
+        .message.user{background:linear-gradient(45deg,#667eea,#764ba2)}
+        .chat-input-container{padding:16px;border-top:1px solid rgba(255,255,255,.1);display:flex;gap:10px}
+        .chat-input{flex:1;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:10px 12px;color:#fff}
+        .send-btn{background:#667eea;border:none;color:#fff;padding:10px 16px;border-radius:10px;cursor:pointer;font-weight:700}
+        .clear-btn{background:transparent;color:#fff;border:1px solid rgba(255,255,255,.3);padding:10px 12px;border-radius:10px;cursor:pointer}
+        @media (max-width:768px){.chat-sidebar{width:100vw;right:-100vw}.main-content.chat-open{margin-right:0}}
       `}</style>
     </div>
   );

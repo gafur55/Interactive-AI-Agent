@@ -156,65 +156,47 @@ async def text_to_speech(text: str = Form(...)):
 
 # --------------------------- new codes
 
-
-# ---------------------------
-# HeyGen: local photo -> talking_photo -> video -> save mp4 (no AV4 required)
-# ---------------------------
-# ---------------------------
-# HeyGen: Generate, poll, download, and local-photo test (Talking Photo)
-# ---------------------------
-import time
-import json
-import requests
-from pathlib import Path
-from typing import Optional
-from fastapi import Form, HTTPException
-from fastapi.responses import JSONResponse, Response
-
-# =========================
-# HeyGen one-shot endpoint
-# =========================
+# --- HeyGen: generate -> status -> stream (no local download) ---
 import os
 import time
 import json
 import requests
-from pathlib import Path
-from fastapi import Form, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
 import logging
-from dotenv import load_dotenv
+from typing import Optional
+from pathlib import Path
 
-# Ensure env is loaded and logger exists (safe if already done earlier)
-load_dotenv()
+from fastapi import Form, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
 logger = logging.getLogger("uvicorn.error")
 
 HEYGEN_API_KEY = os.getenv("HEYGEN_API_KEY")
 if not HEYGEN_API_KEY:
     logger.warning("HEYGEN_API_KEY is missing; /heygen/* routes will fail if called.")
 
+def _hg_headers(json_ct: bool = True):
+    if not HEYGEN_API_KEY:
+        raise HTTPException(status_code=500, detail="HEYGEN_API_KEY is missing")
+    h = {"X-Api-Key": HEYGEN_API_KEY}
+    if json_ct:
+        h["Content-Type"] = "application/json"
+    return h
+
 def _probe_cdn_has_bytes(url: str, max_tries: int = 12, sleep_s: float = 1.5) -> int:
-    """
-    Return an expected content length (>0 if known) once CDN is ready.
-    Uses HEAD and a 1-byte Range probe; retries a few times.
-    """
+    """Wait until CDN actually serves bytes; return content length if known (>0)."""
     for _ in range(max_tries):
         try:
-            h = requests.head(
-                url,
-                timeout=15,
-                allow_redirects=True,
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-            )
+            h = requests.head(url, timeout=15, allow_redirects=True,
+                              headers={"User-Agent": "Mozilla/5.0",
+                                       "Accept": "video/mp4,*/*"})
             cl = h.headers.get("Content-Length") or h.headers.get("content-length")
             if h.status_code == 200 and cl and int(cl) > 0:
                 return int(cl)
-
-            # Tiny range probe: if we get even 1 byte, CDN is ready
-            r = requests.get(
-                url,
-                timeout=15,
-                headers={"Range": "bytes=0-1", "User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-            )
+            # tiny range probe
+            r = requests.get(url, timeout=15,
+                             headers={"Range": "bytes=0-1",
+                                      "User-Agent": "Mozilla/5.0",
+                                      "Accept": "video/mp4,*/*"})
             if r.status_code in (200, 206) and r.content:
                 return max(int(cl or 0), len(r.content))
         except Exception:
@@ -222,182 +204,162 @@ def _probe_cdn_has_bytes(url: str, max_tries: int = 12, sleep_s: float = 1.5) ->
         time.sleep(sleep_s)
     return 0
 
-@app.post("/heygen/generate_and_download")
-async def heygen_generate_and_download(
-    input_text: str = Form(..., description="Speech text for the avatar"),
+@app.post("/heygen/generate")
+async def heygen_generate(
+    input_text: str = Form(...),
+    # Use your own ID here; by default we assume TALKING PHOTO flow
     avatar_id: str = Form("af5820d3e6bb42609e4782cc89db0aee"),
+    character_type: str = Form("talking_photo"),  # "talking_photo" | "avatar"
     voice_id: str = Form("2d5b0e6cf36f460aa7fc47e3eee4ba54"),
     avatar_style: str = Form("normal"),
     bg_type: str = Form("color"),
     bg_value: str = Form("#008000"),
     width: int = Form(1280),
     height: int = Form(720),
-    # File naming & polling controls
-    filename: str = Form("generated_video.mp4"),
-    poll_interval: int = Form(5),
-    max_wait_seconds: int = Form(300),
 ):
     """
-    1) Generate (v2)
-    2) Poll status (v1) until 'completed' (handles waiting/queued/in_progress/processing/pending)
-    3) Wait for CDN bytes (HEAD + Range probe)
-    4) Stream MP4 to client while saving to ./downloads/<filename>
+    Start a HeyGen render and return { video_id }.
+    - If character_type == 'talking_photo': avatar_id is your Talking Photo ID
+    - If character_type == 'avatar':        avatar_id is a template/public avatar id
     """
     try:
-        if not HEYGEN_API_KEY:
-            raise HTTPException(status_code=500, detail="HEYGEN_API_KEY is missing")
+        char = (
+            {"type": "talking_photo", "talking_photo_id": avatar_id, "avatar_style": avatar_style}
+            if character_type == "talking_photo"
+            else {"type": "avatar", "avatar_id": avatar_id, "avatar_style": avatar_style}
+        )
 
-        # 1) Generate
-        logger.info(f"[HeyGen] Starting generation for text='{input_text[:50]}...'")
-        gen_payload = {
+        payload = {
             "video_inputs": [
                 {
-                    "character": {"type": "talking_photo", "talking_photo_id": avatar_id, "avatar_style": avatar_style},
+                    "character": char,
                     "voice": {"type": "text", "input_text": input_text, "voice_id": voice_id},
                     "background": {"type": bg_type, "value": bg_value},
                 }
             ],
             "dimension": {"width": width, "height": height},
         }
-        gen = requests.post(
+
+        r = requests.post(
             "https://api.heygen.com/v2/video/generate",
-            headers={"X-Api-Key": HEYGEN_API_KEY, "Content-Type": "application/json"},
-            data=json.dumps(gen_payload),
+            headers=_hg_headers(),
+            data=json.dumps(payload),
             timeout=60,
         )
-        if gen.status_code != 200:
+        if r.status_code != 200:
             try:
-                err_json = gen.json()
+                err = r.json()
             except Exception:
-                err_json = {"raw": gen.text[:2048]}
-            logger.error(f"[HeyGen] Generate failed: {err_json}")
-            return JSONResponse(status_code=502, content={"error": "HeyGen generate failed", "details": err_json})
+                err = {"raw": r.text[:2048]}
+            logger.error(f"[HeyGen] generate failed: {err}")
+            return JSONResponse(status_code=502, content={"error": "generate failed", "details": err})
 
-        gen_json = gen.json()
-        video_id = (gen_json.get("data") or {}).get("video_id")
-        if not video_id:
-            logger.error("[HeyGen] No video_id returned")
-            return JSONResponse(status_code=502, content={"error": "Missing video_id in HeyGen response", "raw": gen_json})
-        logger.info(f"[HeyGen] Generation started, video_id={video_id}")
+        data = r.json()
+        vid = (data.get("data") or {}).get("video_id")
+        if not vid:
+            return JSONResponse(status_code=502, content={"error": "missing video_id", "raw": data})
+        return {"video_id": vid}
 
-        # 2) Poll until completed
-        headers = {"X-Api-Key": HEYGEN_API_KEY}
+    except Exception as e:
+        logger.exception("heygen_generate error")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/heygen/status")
+async def heygen_status(video_id: str):
+    """Pass-through single status check (no waiting)."""
+    try:
+        url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
+        r = requests.get(url, headers={"X-Api-Key": HEYGEN_API_KEY}, timeout=30)
+        if r.status_code != 200:
+            try:
+                err = r.json()
+            except Exception:
+                err = {"raw": r.text[:2048]}
+            return JSONResponse(status_code=502, content={"error": "status failed", "details": err})
+        return r.json()
+    except Exception as e:
+        logger.exception("heygen_status error")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.get("/heygen/stream")
+async def heygen_stream(
+    request: Request,
+    video_id: str,
+    poll_interval: int = 3,
+    max_wait_seconds: int = 900,
+):
+    """
+    Waits until HeyGen marks the job 'completed', then streams the MP4 bytes.
+    Forwards Range header to support seeking in the <video> element.
+    """
+    try:
+        # 1) poll
         status_url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
         started = time.time()
-
-        # Include all transitional states we’ve seen in the wild
-        transitional = {"waiting", "queued", "in_progress", "processing", "pending", "rendering"}
+        video_url = None
+        thumb = None
 
         while True:
-            resp = requests.get(status_url, headers=headers, timeout=30)
-            if resp.status_code != 200:
+            rs = requests.get(status_url, headers={"X-Api-Key": HEYGEN_API_KEY}, timeout=30)
+            if rs.status_code != 200:
                 try:
-                    err = resp.json()
+                    err = rs.json()
                 except Exception:
-                    err = {"raw": resp.text[:2048]}
-                logger.error(f"[HeyGen] Status check failed: {err}")
-                return JSONResponse(status_code=502, content={"error": "Status check failed", "details": err})
+                    err = {"raw": rs.text[:2048]}
+                return JSONResponse(status_code=502, content={"error": "status failed", "details": err})
 
-            j = resp.json()
-            data = (j.get("data") or {})
-            status = data.get("status")
-            logger.info(f"[HeyGen] video_id={video_id} status={status}")
-
-            if status == "completed":
-                video_url = data.get("video_url")
-                thumbnail_url = data.get("thumbnail_url")
+            j = rs.json()
+            d = (j.get("data") or {})
+            st = d.get("status")
+            if st == "completed":
+                video_url = d.get("video_url")
+                thumb = d.get("thumbnail_url")
                 if not video_url:
-                    logger.error(f"[HeyGen] Completed but no video_url for video_id={video_id}")
-                    return JSONResponse(status_code=502, content={"error": "No video_url in completed status", "raw": j})
-                logger.info(f"[HeyGen] Video ready: {video_url}")
+                    return JSONResponse(status_code=502, content={"error": "completed but no video_url", "raw": j})
                 break
 
-            if status in transitional:
-                # Optional: slower polling for early queue states
-                if status in {"waiting", "queued"}:
-                    sleep_s = max(2, int(poll_interval) * 2)
-                else:
-                    sleep_s = max(1, int(poll_interval))
+            if st == "failed":
+                return JSONResponse(status_code=502, content={"error": "render failed", "details": d.get("error"), "raw": j})
 
-                if (time.time() - started) > int(max_wait_seconds):
-                    logger.error(f"[HeyGen] Timeout waiting for completion video_id={video_id}, last_status={status}")
-                    return JSONResponse(
-                        status_code=504,
-                        content={
-                            "error": "Timeout waiting for video to complete",
-                            "video_id": video_id,
-                            "last_status": status,
-                            "waited_seconds": int(time.time() - started),
-                        },
-                    )
+            if (time.time() - started) > max_wait_seconds:
+                return JSONResponse(
+                    status_code=504,
+                    content={"error": "timeout waiting for completion", "video_id": video_id, "last_status": st},
+                )
+            time.sleep(max(1, poll_interval))
 
-                time.sleep(sleep_s)
-                continue
+        # 2) confirm CDN has bytes (optional)
+        _probe_cdn_has_bytes(video_url, max_tries=12, sleep_s=1.5)
 
-            if status == "failed":
-                logger.error(f"[HeyGen] Generation failed: {data.get('error')}")
-                return JSONResponse(status_code=502, content={"error": "Video generation failed", "details": data.get("error"), "raw": j})
+        # 3) stream (forward Range if the browser requests it)
+        range_header = request.headers.get("range")
+        up_headers = {"User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"}
+        if range_header:
+            up_headers["Range"] = range_header
 
-            logger.warning(f"[HeyGen] Unexpected status={status} for video_id={video_id}")
-            return JSONResponse(status_code=502, content={"error": f"Unexpected status: {status}", "raw": j})
+        upstream = requests.get(video_url, headers=up_headers, stream=True, timeout=300)
+        status_code = upstream.status_code if upstream.status_code in (200, 206) else 200
 
-        # 3) Wait for CDN to have bytes
-        expected_len = _probe_cdn_has_bytes(video_url, max_tries=12, sleep_s=1.5)
-        logger.info(f"[HeyGen] video_id={video_id} CDN content length={expected_len}")
-
-        # 4) Stream and save
-        base_dir = Path(__file__).parent.resolve()
-        downloads_dir = base_dir / "downloads"
-        downloads_dir.mkdir(parents=True, exist_ok=True)
-        out_path = (downloads_dir / filename).resolve()
-        logger.info(f"[HeyGen] Saving to {out_path}")
-
-        upstream = requests.get(
-            video_url,
-            stream=True,
-            timeout=300,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-        )
-        if upstream.status_code not in (200, 206):
-            logger.error(f"[HeyGen] Stream open failed: {upstream.status_code}")
-            return JSONResponse(
-                status_code=502,
-                content={"error": "Failed to open video stream", "status_code": upstream.status_code, "headers": dict(upstream.headers)},
-            )
-
-        def iter_and_save():
-            bytes_written = 0
-            with open(out_path, "wb") as f:
-                for chunk in upstream.iter_content(chunk_size=1024 * 128):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    bytes_written += len(chunk)
-                    yield chunk
-            logger.info(f"[HeyGen] Finished writing {bytes_written} bytes to {out_path}")
-            if bytes_written == 0:
-                try:
-                    out_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-
-        headers_out = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
+        # prepare response headers
+        out_headers = {
             "Cache-Control": "no-store",
+            "Accept-Ranges": upstream.headers.get("Accept-Ranges", "bytes"),
+            "Content-Type": upstream.headers.get("Content-Type", "video/mp4"),
             "X-HeyGen-Video-Id": video_id,
             "X-HeyGen-Video-URL": video_url,
-            "X-Saved-Path": str(out_path),
         }
-        if thumbnail_url:
-            headers_out["X-HeyGen-Thumbnail-URL"] = thumbnail_url
-        if expected_len:
-            headers_out["Content-Length"] = str(expected_len)
+        cl = upstream.headers.get("Content-Length")
+        if cl: out_headers["Content-Length"] = cl
+        cr = upstream.headers.get("Content-Range")
+        if cr: out_headers["Content-Range"] = cr
 
-        logger.info(f"[HeyGen] Streaming video_id={video_id} to client")
-        return StreamingResponse(iter_and_save(), media_type="video/mp4", headers=headers_out)
+        def body_iter():
+            for chunk in upstream.iter_content(chunk_size=1024 * 128):
+                if chunk:
+                    yield chunk
 
-    except HTTPException:
-        raise
+        return StreamingResponse(body_iter(), status_code=status_code, headers=out_headers, media_type="video/mp4")
+
     except Exception as e:
-        logger.exception("[HeyGen] generate_and_download (robust) unexpected error")
+        logger.exception("heygen_stream error")
         return JSONResponse(status_code=500, content={"error": str(e)})

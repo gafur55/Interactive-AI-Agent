@@ -163,25 +163,33 @@ async def chat(
             sessions[session_id].append(message)  # Save tool request
 
             for tool_call in message.tool_calls:
-                logger.info(f"Tool call: {tool_call.function.name} with args {tool_call.function.arguments}")
+                try:
+                    logger.info(f"Tool call: {tool_call.function.name} with args {tool_call.function.arguments}")
 
-                if tool_call.function.name == "search_spotify":
-                    args = json.loads(tool_call.function.arguments)
-                    raw = search_spotify(args["query"], args.get("type_", "track"))
-                    formatted = format_spotify_results(raw)
+                    if tool_call.function.name == "search_spotify":
+                        args = json.loads(tool_call.function.arguments)
+                        raw = search_spotify(args["query"], args.get("type_", "track"))
+                        formatted = format_spotify_results(raw)
 
-                    # Always respond with a JSON object {results: [...]}
+                        sessions[session_id].append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(formatted)
+                        })
+
+                    else:
+                        sessions[session_id].append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps({"error": f"Unknown tool {tool_call.function.name}"})
+                        })
+
+                except Exception as e:
+                    logger.exception("Tool handling error")
                     sessions[session_id].append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps({"results": formatted})
-                    })
-
-                else:
-                    sessions[session_id].append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps({"error": "Unsupported tool"})
+                        "content": json.dumps({"error": str(e)})
                     })
 
             # ✅ Only after responding to ALL tool calls, continue the chat
@@ -318,14 +326,17 @@ def format_spotify_results(raw):
 
     elif "playlists" in raw:
         for p in raw["playlists"]["items"][:3]:
-            url = p.get("external_urls", {}).get("spotify")
+            if not p:  # skip None
+                continue
+            url = p.get("external_urls", {}).get("spotify") if p.get("external_urls") else None
             if not url:
                 continue
             results.append({
-                "name": p["name"],
+                "name": p.get("name", "Unknown Playlist"),
                 "artist": "Playlist",
                 "url": url
             })
+
 
     elif "artists" in raw:
         for a in raw["artists"]["items"][:3]:

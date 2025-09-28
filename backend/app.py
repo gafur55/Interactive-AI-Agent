@@ -74,21 +74,49 @@ async def speech_to_text(file: UploadFile = File(...)):
         logger.exception("STT error")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+
+
+
+
 # ---------------------------
-# Chat (OpenAI)
+# Global in-memory sessions
 # ---------------------------
+sessions = {}  # { session_id: [ {role, content}, ... ] }
+
 @app.post("/chat")
-async def chat(prompt: str = Form(...)):
+async def chat(
+    prompt: str = Form(...),
+    session_id: str = Form("default")  # default if you don’t pass one
+):
     try:
+        # initialize session if new
+        if session_id not in sessions:
+            sessions[session_id] = [
+                {"role": "system", "content": "You are a music expert AI avatar."}
+            ]
+
+        # append user message
+        sessions[session_id].append({"role": "user", "content": prompt})
+
+        # send full conversation to GPT
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=sessions[session_id],
         )
+
         reply = response.choices[0].message.content
+
+        # append assistant reply
+        sessions[session_id].append({"role": "assistant", "content": reply})
+
         return {"reply": reply}
+
     except Exception as e:
         logger.exception("Chat error")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+
 
 # ---------------------------
 # Text-to-Speech (ElevenLabs via raw requests)

@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import avatarPng from "./assets/avatar.png";
 
 const API_BASE = "http://localhost:8000";
+const SESSION_ID = Math.random().toString(36).slice(2);
 
 export default function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -47,6 +48,13 @@ export default function App() {
     } catch {}
     setCurrentAudio(audio);
   };
+
+
+
+
+
+
+
 
   // --- Record mic -> STT -> Chat -> TTS ---
   const handleAvatarClick = async () => {
@@ -95,7 +103,7 @@ export default function App() {
           const chatRes = await fetch(`${API_BASE}/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ prompt: userText }),
+             body: new URLSearchParams({ prompt: userText, session_id: SESSION_ID }),
           });
           const chatJson = await chatRes.json();
 
@@ -152,7 +160,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ prompt }),
+        body: new URLSearchParams({ prompt, session_id: SESSION_ID }),
       });
       const data = await res.json();
 

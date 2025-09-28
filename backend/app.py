@@ -11,7 +11,7 @@ import json
 import requests
 import logging
 import base64
-
+import re
 
 
 
@@ -217,9 +217,20 @@ async def chat(
 # ---------------------------
 # Text-to-Speech (ElevenLabs via raw requests)
 # ---------------------------
+
+
+def strip_links_for_tts(text: str) -> str:
+    # Remove raw URLs inside parentheses, keep only visible song/artist names
+    return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
+
+
+
 @app.post("/tts")
 async def text_to_speech(text: str = Form(...)):
-    if not text or not text.strip():
+
+    clean_text = strip_links_for_tts(text)
+
+    if not clean_text.strip():
         raise HTTPException(status_code=400, detail="Missing 'text'")
 
     if not ELEVEN_API_KEY:
@@ -235,7 +246,8 @@ async def text_to_speech(text: str = Form(...)):
             "accept": "audio/mpeg",
             "content-type": "application/json",
         }
-        payload = {"text": text, "model_id": model_id}
+        
+        payload = {"text": clean_text, "model_id": model_id}
 
         r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
 

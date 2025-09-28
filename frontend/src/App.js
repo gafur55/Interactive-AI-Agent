@@ -3,6 +3,8 @@ import React, { useState } from "react";
 import avatarPng from "./assets/avatar.png";
 
 const API_BASE = "http://localhost:8000";
+// Paste your Talking Photo "Copy Avatar ID" here:
+const TALKING_PHOTO_ID = "7f5acbb81e684f6c94e645f12206648d";
 
 export default function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -48,7 +50,7 @@ export default function App() {
     setCurrentAudio(audio);
   };
 
-  // --- Record mic -> STT -> Chat -> TTS ---
+  // --- Record mic -> STT -> Chat -> TTS -> HeyGen (auto) ---
   const handleAvatarClick = async () => {
     // Stop current TTS if playing
     if (currentAudio) {
@@ -103,18 +105,64 @@ export default function App() {
           const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
           setMessages((prev) => [...prev, aiMsg]);
 
-          // 3) TTS (play assistant message)
+          // // 3) TTS (play assistant message)
+          // if (aiText) {
+          //   const ttsRes = await fetch(`${API_BASE}/tts`, {
+          //     method: "POST",
+          //     headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          //     body: new URLSearchParams({ text: aiText }),
+          //   });
+          //   if (!ttsRes.ok) {
+          //     console.error("TTS error:", await ttsRes.text());
+          //   } else {
+          //     const audioBlob2 = await ttsRes.blob();
+          //     await playAudioBlob(audioBlob2);
+          //   }
+          // }
+
+          // 4) HeyGen render & download (auto)
           if (aiText) {
-            const ttsRes = await fetch(`${API_BASE}/tts`, {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams({ text: aiText }),
-            });
-            if (!ttsRes.ok) {
-              console.error("TTS error:", await ttsRes.text());
-            } else {
-              const audioBlob2 = await ttsRes.blob();
-              await playAudioBlob(audioBlob2);
+            try {
+              const hfd = new FormData();
+              hfd.append("input_text", aiText);
+              hfd.append("talking_photo_id", TALKING_PHOTO_ID); // your avatar
+              const suggestedName = `vivian_${Date.now()}.mp4`;
+              hfd.append("filename", suggestedName);
+
+              const hres = await fetch(`${API_BASE}/heygen/generate_and_download`, {
+                method: "POST",
+                body: hfd,
+              });
+
+              const ct = hres.headers.get("content-type") || "";
+              if (!hres.ok || ct.includes("application/json")) {
+                let detail = "";
+                try {
+                  const j = await hres.json();
+                  detail = j.error || JSON.stringify(j).slice(0, 400);
+                } catch {}
+                throw new Error(`HeyGen error ${hres.status}: ${detail || "Unknown error"}`);
+              }
+
+              const blob = await hres.blob();
+              let downloadName = suggestedName;
+              const dispo = hres.headers.get("Content-Disposition");
+              if (dispo) {
+                const m = /filename="?([^"]+)"?/i.exec(dispo);
+                if (m && m[1]) downloadName = m[1];
+              }
+
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = downloadName;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            } catch (e) {
+              console.error("HeyGen auto-download failed:", e);
+              setError(e?.message || "HeyGen video failed.");
             }
           }
         } catch (err) {
@@ -134,7 +182,7 @@ export default function App() {
     }
   };
 
-  // --- Type -> Chat -> TTS ---
+  // --- Type -> Chat -> TTS -> HeyGen (auto) ---
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
 
@@ -175,43 +223,55 @@ export default function App() {
           console.error("TTS error:", await ttsRes.text());
         }
       }
+
+      // HeyGen render & download (auto)
+      if (aiText) {
+        try {
+          const hfd = new FormData();
+          hfd.append("input_text", aiText);
+          hfd.append("talking_photo_id", TALKING_PHOTO_ID); // your avatar
+          const suggestedName = `vivian_${Date.now()}.mp4`;
+          hfd.append("filename", suggestedName);
+
+          const hres = await fetch(`${API_BASE}/heygen/generate_and_download`, {
+            method: "POST",
+            body: hfd,
+          });
+
+          const ct = hres.headers.get("content-type") || "";
+          if (!hres.ok || ct.includes("application/json")) {
+            let detail = "";
+            try {
+              const j = await hres.json();
+              detail = j.error || JSON.stringify(j).slice(0, 400);
+            } catch {}
+            throw new Error(`HeyGen error ${hres.status}: ${detail || "Unknown error"}`);
+          }
+
+          const blob = await hres.blob();
+          let downloadName = suggestedName;
+          const dispo = hres.headers.get("Content-Disposition");
+          if (dispo) {
+            const m = /filename="?([^"]+)"?/i.exec(dispo);
+            if (m && m[1]) downloadName = m[1];
+          }
+
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = downloadName;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        } catch (e) {
+          console.error("HeyGen auto-download failed:", e);
+          setError(e?.message || "HeyGen video failed.");
+        }
+      }
     } catch (err) {
       console.error("Chat error:", err);
       setError(err?.message || "Chat failed.");
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  // --- HeyGen: generate & auto-download using latest assistant reply ---
-  const downloadHeygenFromLastReply = async () => {
-    const text = latestAssistantText();
-    if (!text) {
-      setError("No assistant message to use for video generation yet.");
-      return;
-    }
-    try {
-      setIsBusy(true);
-      setError("");
-
-      // Start generation
-      const fd = new FormData();
-      fd.append("input_text", text);
-    
-      const genRes = await fetch(`${API_BASE}/heygen/generate`, { method: "POST", body: fd });
-      if (!genRes.ok) {
-        const t = await genRes.text();
-        throw new Error(`HeyGen generate failed: ${t}`);
-      }
-      const genJson = await genRes.json();
-      const video_id = genJson.video_id;
-      if (!video_id) throw new Error("No video_id returned from HeyGen.");
-
-      // Auto-download (backend will poll until completed)
-      window.location = `${API_BASE}/heygen/download?video_id=${encodeURIComponent(video_id)}`;
-    } catch (err) {
-      console.error(err);
-      setError(err?.message || "Failed to start HeyGen generation.");
     } finally {
       setIsBusy(false);
     }
@@ -262,13 +322,6 @@ export default function App() {
           {isRecording ? <>🎤 Listening... Speak now!</> : <>🎵 Tap the avatar to start talking!</>}
         </div>
 
-        {/* Quick actions under avatar */}
-        <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
-          <button onClick={downloadHeygenFromLastReply} className="send-btn" disabled={isBusy}>
-            🎬 Generate & Download Video (last reply)
-          </button>
-        </div>
-
         {error && (
           <div style={{ marginTop: 10, color: "#ffb3b3" }}>
             ⚠️ {error}
@@ -308,7 +361,7 @@ export default function App() {
             placeholder="Type your message..."
             className="chat-input"
           />
-          <button onClick={handleSendMessage} className="send-btn" disabled={isBusy}>
+        <button onClick={handleSendMessage} className="send-btn" disabled={isBusy}>
             ➤
           </button>
         </div>
@@ -322,7 +375,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* Styles (kept from your version) */}
+      {/* Styles */}
       <style jsx>{`
         * { margin: 0; padding: 0; box-sizing: border-box; }
         .app {
@@ -360,8 +413,6 @@ export default function App() {
         .send-btn:hover { background: #5a67d8; transform: translateY(-1px); }
         .clear-btn { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.3); padding: 8px 12px; border-radius: 10px; cursor: pointer; }
         .chat-stats { padding: 15px 20px; border-top: 1px solid rgba(255, 255, 255, 0.1); font-size: 0.85rem; color: rgba(255, 255, 255, 0.7); }
-        .floating-notes { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
-        @keyframes float { 0%, 100% { transform: translateY(0) rotate(0deg); } 33% { transform: translateY(-20px) rotate(5deg); } 66% { transform: translateY(10px) rotate(-3deg); } }
         @media (max-width: 768px) {
           .main-content.chat-open { margin-right: 0; }
           .chat-sidebar { width: 100vw; right: -100vw; }

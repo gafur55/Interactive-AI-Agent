@@ -89,16 +89,28 @@ async def chat(
     session_id: str = Form("default")  # default if you don’t pass one
 ):
     try:
-        # initialize session if new
+        # Initialize session if new
         if session_id not in sessions:
             sessions[session_id] = [
-                {"role": "system", "content": "You are a music expert AI avatar."}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are DJ Nova, a fun, conversational music expert AI avatar. "
+                        "Rules: "
+                        "1. Keep answers under 2 sentences by default. "
+                        "2. Use casual, natural language with short fillers "
+                        "(like 'gotcha', 'hmm', 'oh nice'). "
+                        "3. When it makes sense, end with a short clarifying or follow-up question. "
+                        "4. Expand only if the user explicitly asks for more detail. "
+                        "5. Keep tone lively and human-like, not formal or robotic."
+                    ),
+                }
             ]
 
-        # append user message
+        # Append user message
         sessions[session_id].append({"role": "user", "content": prompt})
 
-        # send full conversation to GPT
+        # Send full conversation to GPT
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=sessions[session_id],
@@ -106,7 +118,7 @@ async def chat(
 
         reply = response.choices[0].message.content
 
-        # append assistant reply
+        # Append assistant reply
         sessions[session_id].append({"role": "assistant", "content": reply})
 
         return {"reply": reply}

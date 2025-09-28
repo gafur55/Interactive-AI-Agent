@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import bacground_video from "./assets/bacground_video.mp4";
 
 const API_BASE = "http://localhost:8000";
@@ -21,7 +21,18 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // helper
+  // --- Background video: mute/unmute only (never pause) ---
+  const bgVideoRef = useRef(null);
+  const muteBg = () => { const v = bgVideoRef.current; if (v) v.muted = true; };
+  const unmuteBg = () => { const v = bgVideoRef.current; if (v) { v.muted = false; v.play().catch(() => {}); } };
+
+  // Set lower default volume on first render
+  useEffect(() => {
+    if (bgVideoRef.current) {
+      bgVideoRef.current.volume = 0.05;   // lower to 20% loudness
+    }
+  }, []);
+
   function renderMessage(content) {
     if (!content) return "";
     return content.replace(
@@ -42,27 +53,32 @@ export default function App() {
     return "";
   };
 
+  // Play TTS; keep video running but muted during playback
   const playAudioBlob = async (blob) => {
+    muteBg(); // mute while AI talks
+
     const url = URL.createObjectURL(blob);
     if (currentAudio) {
-      try {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-      } catch {}
+      try { currentAudio.pause(); currentAudio.currentTime = 0; } catch {}
     }
     const audio = new Audio(url);
-    audio.onended = () => setCurrentAudio(null);
-    try {
-      await audio.play();
-    } catch {}
+
+    audio.onended = () => {
+      setCurrentAudio(null);
+      if (!isRecording) unmuteBg(); // restore bg audio after AI finishes
+    };
+
+    try { await audio.play(); } catch {}
     setCurrentAudio(audio);
   };
 
   // --- mic -> STT -> Chat -> TTS ---
   const handleAvatarClick = async () => {
+    // On Talk press: mute bg (keep it playing)
+    muteBg();
+
     if (currentAudio) {
-      currentAudio.pause();
-      currentAudio.currentTime = 0;
+      try { currentAudio.pause(); currentAudio.currentTime = 0; } catch {}
       setCurrentAudio(null);
     }
 
@@ -77,15 +93,14 @@ export default function App() {
       const recorder = new MediaRecorder(stream);
       const chunks = [];
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
       recorder.onstop = async () => {
         try {
           setIsBusy(true);
           setError("");
 
+          // STT
           const audioBlob = new Blob(chunks, { type: "audio/wav" });
           const fd = new FormData();
           fd.append("file", audioBlob, "recording.wav");
@@ -97,6 +112,7 @@ export default function App() {
           const userMsg = { id: Date.now(), role: "user", content: userText, timestamp: new Date() };
           setMessages((prev) => [...prev, userMsg]);
 
+          // Chat
           const chatRes = await fetch(`${API_BASE}/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -108,6 +124,7 @@ export default function App() {
           const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
           setMessages((prev) => [...prev, aiMsg]);
 
+          // TTS (AI answering) — bg stays muted while speaking
           if (aiText) {
             const ttsRes = await fetch(`${API_BASE}/tts`, {
               method: "POST",
@@ -119,11 +136,15 @@ export default function App() {
               await playAudioBlob(audioBlob2);
             } else {
               console.error("TTS error:", await ttsRes.text());
+              if (!isRecording) unmuteBg();
             }
+          } else {
+            if (!isRecording) unmuteBg();
           }
         } catch (err) {
           console.error("Voice flow error:", err);
           setError(err?.message || "Something went wrong in voice flow.");
+          if (!isRecording) unmuteBg();
         } finally {
           setIsBusy(false);
         }
@@ -135,9 +156,11 @@ export default function App() {
     } catch (err) {
       console.error("Recording error:", err);
       setError(err?.message || "Could not access microphone.");
+      unmuteBg();
     }
   };
 
+  // --- Type -> Chat -> TTS ---
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
     const userMsg = { id: Date.now(), role: "user", content: inputMessage, timestamp: new Date() };
@@ -172,11 +195,15 @@ export default function App() {
           await playAudioBlob(audioBlob);
         } else {
           console.error("TTS error:", await ttsRes.text());
+          if (!isRecording) unmuteBg();
         }
+      } else {
+        if (!isRecording) unmuteBg();
       }
     } catch (err) {
       console.error("Chat error:", err);
       setError(err?.message || "Chat failed.");
+      if (!isRecording) unmuteBg();
     } finally {
       setIsBusy(false);
     }
@@ -188,19 +215,22 @@ export default function App() {
 
   const clearChat = () => {
     setMessages([
-      {
-        id: 1,
-        role: "assistant",
-        content: "Hello! I'm DJ Nova. Tap me to start talking!",
-        timestamp: new Date(),
-      },
+      { id: 1, role: "assistant", content: "Hello! I'm DJ Nova. Tap me to start talking!", timestamp: new Date() },
     ]);
     setError("");
   };
 
   return (
     <div className="app">
-      <video autoPlay loop muted playsInline className="background-video">
+      {/* background video plays quietly by default */}
+      <video
+        ref={bgVideoRef}
+        autoPlay
+        loop
+        muted={false}
+        playsInline
+        className="background-video"
+      >
         <source src={bacground_video} type="video/mp4" />
         Your browser does not support the video tag.
       </video>
@@ -226,7 +256,9 @@ export default function App() {
         </div>
         <div className="chat-messages">
           {messages.map((m) => (
-            <div key={m.id} className={`message ${m.role}`}
+            <div
+              key={m.id}
+              className={`message ${m.role}`}
               dangerouslySetInnerHTML={{
                 __html: (m.role === "assistant" ? "🎵 " : "") + renderMessage(m.content),
               }}
@@ -261,7 +293,6 @@ export default function App() {
         .main-content { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; transition: margin-right 0.3s ease; padding: 2rem; }
         .main-content.chat-open { margin-right: 400px; }
 
-        /* TALK BUTTON */
         .talk-btn {
           background: rgba(102,126,234,0.85);
           color: #fff;

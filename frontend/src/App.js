@@ -21,6 +21,18 @@ export default function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [error, setError] = useState("");
 
+  function addMessage(role, content) {
+    setMessages(prev => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        role,
+        content,
+        timestamp: new Date(),
+      },
+    ]);
+  }
+
   // --- Background video: mute/unmute only (never pause) ---
   const bgVideoRef = useRef(null);
   const muteBg = () => { const v = bgVideoRef.current; if (v) v.muted = true; };
@@ -32,6 +44,70 @@ export default function App() {
       bgVideoRef.current.volume = 0.05;   // lower to 20% loudness
     }
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isRecording) {
+        // ✅ Only runs when the Talk button is NOT recording
+        callMyMethod();
+      }
+    }, 40000); // 30s
+
+    return () => clearInterval(interval);
+  }, [isRecording]); // depend on isRecording so it always knows current state
+
+  async function callMyMethod() {
+      
+      console.log("callMyMethod executed — Talk button is idle");
+
+      const snapRes = await fetch(`${API_BASE}/camera/snapshot`);
+        if (!snapRes.ok) throw new Error("Failed to capture snapshot");
+        const { image_base64 } = await snapRes.json();
+        console.log("📸 idle snapshot ok, base64 len:", image_base64?.length || 0);
+
+      const hedoraRes = await fetch(`${API_BASE}/get_hedora_text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_base64,
+          prompt: "Describe the mood of this photo in one paragraph.",
+          max_tokens: 256,
+        }),
+      });
+
+      if (!hedoraRes.ok) throw new Error("Herdora analysis failed");
+      const { text: hedoraText } = await hedoraRes.json();
+      console.log("📝 hedora text:", hedoraText);
+
+    const chatRes = await fetch(`${API_BASE}/chat_from_hedora_text`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hedora_text: hedoraText }),
+      });
+      if (!chatRes.ok) throw new Error("Chat conversion failed");
+      const { reply } = await chatRes.json();
+      console.log("💬 reply:", reply);
+
+      addMessage("assistant", reply);
+
+      if (reply) {
+        const ttsRes = await fetch(`${API_BASE}/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ text: reply }),
+        });
+        if (ttsRes.ok) {
+          const audioBlob = await ttsRes.blob();
+          await playAudioBlob(audioBlob);
+        } else {
+          console.error("TTS error:", await ttsRes.text());
+          if (!isRecording) unmuteBg();
+        }
+      } else {
+        if (!isRecording) unmuteBg();
+      }
+
+  }
 
   function renderMessage(content) {
     if (!content) return "";

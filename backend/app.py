@@ -1,9 +1,18 @@
 # app.py
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, Response
-from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+import os
+import re
+import json
+import base64
+import logging
+import requests
+import cv2
 from io import BytesIO
+from dotenv import load_dotenv
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
+import openai
 from elevenlabs.client import ElevenLabs
 import openai
 import os
@@ -26,7 +35,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-
+HERDORA_API_KEY = os.getenv("HERDORA_API_KEY")
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY is missing")
@@ -42,7 +51,7 @@ openai.api_key = OPENAI_API_KEY
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # React dev server
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -385,3 +394,154 @@ def spotify_search(query: str, type_: str = "track"):
     except Exception as e:
         logger.exception("Spotify search error")
         return JSONResponse(status_code=500, content={"error": str(e)})
+# ---------------------------
+# Camera snapshot → base64
+# ---------------------------
+@app.get("/camera/snapshot")
+def camera_snapshot():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        raise HTTPException(status_code=500, detail="❌ Cannot open camera")
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        raise HTTPException(status_code=500, detail="❌ Failed to grab frame")
+    ok, buf = cv2.imencode(".jpg", frame)
+    if not ok:
+        raise HTTPException(status_code=500, detail="❌ Failed to encode frame")
+    img_base64 = base64.b64encode(buf).decode("utf-8")
+    return {"image_base64": img_base64}
+
+# ---------------------------
+# Herdora (OpenAI-compatible)
+# ---------------------------
+HERDORA_BASE_URL = "https://pygmalion.herdora.com/v1"
+HERDORA_MODEL = "Qwen/Qwen3-VL-235B-A22B-Instruct"
+
+class HerdoraRequest(BaseModel):
+    image_base64: str
+    prompt: str = "Describe this image."
+    max_tokens: int = 256
+
+def _ensure_data_url(s: str) -> str:
+    s = s.strip()
+    if s.startswith("data:image/"):
+        return s
+    return f"data:image/jpeg;base64,{s}"
+
+def _herdora_client() -> openai.OpenAI:
+    if not HERDORA_API_KEY:
+        raise HTTPException(status_code=500, detail="HERDORA_API_KEY is not set")
+    return  openai.OpenAI(base_url=HERDORA_BASE_URL, api_key=HERDORA_API_KEY)
+
+@app.post("/get_hedora_text")
+def get_hedora_text(body: HerdoraRequest):
+    try:
+        client = _herdora_client()
+        data_url = _ensure_data_url(body.image_base64)
+        resp = client.chat.completions.create(
+            model=HERDORA_MODEL,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": body.prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            max_tokens=body.max_tokens,
+        )
+        text = resp.choices[0].message.content if resp.choices else ""
+        return {"text": text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Herdora request failed: {e}")
+
+# ---------------------------
+# Convert Herdora paragraph → short friendly line (ChatGPT)
+# ---------------------------
+class HedoraText(BaseModel):
+    hedora_text: str
+
+@app.post("/chat_from_hedora_text")
+def chat_from_hedora_text(body: HedoraText):
+    prompt = f"""
+    You are a friendly conversational assistant **with a love for music**.
+
+    Below is a paragraph that describes the mood of a photo.
+
+    Your task:
+    - Speak **directly to the person in the photo**—start with their name if provided,
+    or use a warm greeting like “Hey there!” or “Hi friend!” before the main thought.
+    - Keep it relaxed and natural (1–2 sentences).
+    - **Bring the chat back to music**—relate the mood to a rhythm, melody, playlist,
+    or invite them to share what they’re listening to.
+    - Avoid repeating every detail; just capture the vibe and spark a music-centered conversation.
+
+    Mood paragraph:
+    {body.hedora_text}
+
+    Return only the conversational message.
+    """.strip()
+
+
+
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=80,
+            temperature=0.7
+        )
+        reply = response.choices[0].message.content.strip()
+        return {"reply": reply}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"OpenAI request failed: {e}")
+
+# ---------------------------
+# TTS (ElevenLabs REST)
+# ---------------------------
+def strip_links_for_tts(text: str) -> str:
+    return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
+
+@app.post("/tts")
+async def text_to_speech(text: str = Form(...)):
+    clean_text = strip_links_for_tts(text)
+    if not clean_text.strip():
+        raise HTTPException(status_code=400, detail="Missing 'text'")
+    if not ELEVEN_API_KEY:
+        raise HTTPException(status_code=500, detail="ELEVEN_API_KEY is missing")
+
+    voice_id = "ZF6FPAbjXT4488VcRRnw"  # example voice
+    model_id = "eleven_multilingual_v2"
+
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+        headers = {"xi-api-key": ELEVEN_API_KEY, "accept": "audio/mpeg", "content-type": "application/json"}
+        payload = {"text": clean_text, "model_id": model_id}
+
+        r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
+        ct = r.headers.get("content-type", "")
+        if r.status_code != 200:
+            body_preview = r.text[:2048] if ("json" in ct or "text" in ct) else f"<{ct} {len(r.content)} bytes>"
+            logger.error(f"ElevenLabs error {r.status_code} CT={ct}: {body_preview}")
+            return JSONResponse(status_code=502, content={"error": "TTS provider error", "status": r.status_code, "content_type": ct, "body": body_preview})
+
+        audio_bytes = b"".join(r.iter_content(chunk_size=8192))
+        if not audio_bytes:
+            raise HTTPException(status_code=502, detail="Empty audio from TTS provider")
+
+        return Response(content=audio_bytes, media_type="audio/mpeg",
+                        headers={"Content-Disposition": 'inline; filename="speech.mp3"',
+                                 "Cache-Control": "no-store",
+                                 "Accept-Ranges": "bytes",
+                                 "Content-Length": str(len(audio_bytes))})
+    except requests.Timeout:
+        logger.exception("TTS timeout")
+        raise HTTPException(status_code=504, detail="TTS timed out")
+    except requests.RequestException as e:
+        logger.exception("TTS network error")
+        raise HTTPException(status_code=502, detail=f"TTS network error: {e}")
+    except Exception as e:
+        logger.exception("TTS unexpected error")
+        return JSONResponse(status_code=502, content={"error": str(e)})

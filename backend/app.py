@@ -170,11 +170,11 @@ async def chat(
                     raw = search_spotify(args["query"], args.get("type_", "track"))
                     formatted = format_spotify_results(raw)
 
-                    # Respond to THIS tool call id
+                    # Always respond with a JSON object {results: [...]}
                     sessions[session_id].append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(formatted)
+                        "content": json.dumps({"results": formatted})
                     })
 
                 else:
@@ -184,7 +184,7 @@ async def chat(
                         "content": json.dumps({"error": "Unsupported tool"})
                     })
 
-            # Call GPT again so it can phrase the final reply
+            # ✅ Only after responding to ALL tool calls, continue the chat
             response = openai.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=sessions[session_id],
@@ -304,26 +304,51 @@ def search_spotify(query: str, type_: str = "track", limit: int = 3):
 
 def format_spotify_results(raw):
     results = []
+
     if "tracks" in raw:
-        for t in raw["tracks"]["items"][:3]:  # limit to top 3
-            results.append(
-                f"{t['name']} by {t['artists'][0]['name']} ({t['external_urls']['spotify']})"
-            )
+        for t in raw["tracks"]["items"][:3]:
+            url = t.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": t["name"],
+                "artist": t["artists"][0]["name"],
+                "url": url
+            })
+
     elif "playlists" in raw:
         for p in raw["playlists"]["items"][:3]:
-            results.append(
-                f"{p['name']} playlist ({p['external_urls']['spotify']})"
-            )
+            url = p.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": p["name"],
+                "artist": "Playlist",
+                "url": url
+            })
+
     elif "artists" in raw:
         for a in raw["artists"]["items"][:3]:
-            results.append(
-                f"{a['name']} ({a['external_urls']['spotify']})"
-            )
+            url = a.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": a["name"],
+                "artist": "Artist",
+                "url": url
+            })
+
     elif "albums" in raw:
         for al in raw["albums"]["items"][:3]:
-            results.append(
-                f"{al['name']} by {al['artists'][0]['name']} ({al['external_urls']['spotify']})"
-            )
+            url = al.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": al["name"],
+                "artist": al["artists"][0]["name"],
+                "url": url
+            })
+
     return results
 
 

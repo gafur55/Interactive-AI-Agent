@@ -236,7 +236,7 @@ async def text_to_speech(text: str = Form(...)):
     if not ELEVEN_API_KEY:
         raise HTTPException(status_code=500, detail="ELEVEN_API_KEY is missing")
 
-    voice_id = "JBFqnCBsd6RMkjVDRZzb"  # Demo voice; replace if you like
+    voice_id = "ZF6FPAbjXT4488VcRRnw"  # Demo voice; replace if you like
     model_id = "eleven_multilingual_v2"
 
     try:

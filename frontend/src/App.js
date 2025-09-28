@@ -1,6 +1,7 @@
 // App.js
 import React, { useState } from "react";
-import avatarPng from "./assets/avatar.png";
+import bacground_video from "./assets/bacground_video.mp4";
+
 
 const API_BASE = "http://localhost:8000";
 const SESSION_ID = Math.random().toString(36).slice(2);
@@ -243,10 +244,21 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* Full-screen background video */}
+      <video
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="background-video"
+      >
+        <source src={bacground_video} type="video/mp4" />
+        Your browser does not support the video tag.
+      </video>
       {/* Main Content */}
       <div className={`main-content ${isChatOpen ? "chat-open" : ""}`}>
         {/* Avatar Section (no mouth sync) */}
-        <div className="avatar-container" style={{ position: "relative" }}>
+        {/* <div className="avatar-container" style={{ position: "relative" }}>
           <div onClick={handleAvatarClick} style={{ cursor: "pointer" }}>
             <img
               src={avatarPng}
@@ -263,19 +275,28 @@ export default function App() {
               draggable={false}
             />
           </div>
-        </div>
+        </div> */}
+
+        <button
+          className={`talk-btn ${isRecording ? "recording" : ""}`}
+          onClick={handleAvatarClick}
+          aria-label={isRecording ? "Stop recording" : "Start recording"}
+        >
+          {isRecording ? "● Listening… Tap to stop" : "🎤 Talk"}
+        </button>
+
 
         {/* Voice Status */}
-        <div className={`voice-status ${isRecording ? "listening" : ""}`}>
+        {/* <div className={`voice-status ${isRecording ? "listening" : ""}`}>
           {isRecording ? <>🎤 Listening... Speak now!</> : <>🎵 Tap the avatar to start talking!</>}
-        </div>
+        </div> */}
 
         {/* Quick actions under avatar */}
-        <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
+        {/* <div style={{ marginTop: 16, display: "flex", gap: 10 }}>
           <button onClick={downloadHeygenFromLastReply} className="send-btn" disabled={isBusy}>
             🎬 Generate & Download Video (last reply)
           </button>
-        </div>
+        </div> */}
 
         {error && (
           <div style={{ marginTop: 10, color: "#ffb3b3" }}>
@@ -332,10 +353,20 @@ export default function App() {
 
       {/* Styles (kept from your version) */}
       <style jsx>{`
+        .background-video {
+          position: fixed;   /* glue to viewport */
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          object-fit: cover; /* fill the screen nicely */
+          z-index: -1;       /* stay behind everything else */
+          }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         .app {
           font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+          
           min-height: 100vh; color: white; overflow-x: hidden; position: relative;
         }
         .main-content { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; transition: margin-right 0.3s ease; padding: 2rem; }

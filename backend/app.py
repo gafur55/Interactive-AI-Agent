@@ -10,6 +10,13 @@ import os
 import json
 import requests
 import logging
+import base64
+import re
+
+
+
+
+
 
 # ---------------------------
 # Load environment variables
@@ -17,6 +24,9 @@ import logging
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
+SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY is missing")
@@ -83,30 +93,117 @@ async def speech_to_text(file: UploadFile = File(...)):
 # ---------------------------
 sessions = {}  # { session_id: [ {role, content}, ... ] }
 
+
+
+# Tools for GPT
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_spotify",
+            "description": "Search for songs, artists, or playlists on Spotify",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query like artist or song"},
+                    "type_": {"type": "string", "enum": ["track", "artist", "playlist"], "description": "Type of search"}
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
+
+
 @app.post("/chat")
 async def chat(
     prompt: str = Form(...),
-    session_id: str = Form("default")  # default if you don’t pass one
+    session_id: str = Form("default")
 ):
     try:
-        # initialize session if new
+        # Initialize session with conversational rules
         if session_id not in sessions:
             sessions[session_id] = [
-                {"role": "system", "content": "You are a music expert AI avatar."}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are DJ Nova, a fun, conversational music expert AI avatar. "
+                        "Rules: "
+                        "1. Keep answers short (1–2 sentences max). "
+                        "2. Use casual, natural language with fillers (like 'gotcha', 'oh nice', 'hmm'). "
+                        "3. If sharing music from Spotify, present it like you’re chatting with a friend, not a search engine. "
+                        "   - Instead of 'Here are three tracks:' → say something like 'Gotcha, check these out:' "
+                        "   - Mention artist + vibe in plain words, not bullet points. "
+                        "   - Always drop the Spotify link inline with the track name. "
+                        "4. End with a quick follow-up question (like 'Want me to pull more like that?' or 'Should I grab a playlist too?'). "
+                        "5. If the user asks for tracks → use Spotify type=track. "
+                        "   If they ask for playlists → type=playlist. "
+                        "   If they ask for artists → type=artist. "
+                        "   If they ask for albums → type=album. "
+                        "6. Never make up songs or artists — only use Spotify results. "
+                    ),
+                }
             ]
 
-        # append user message
+        # Add user message
         sessions[session_id].append({"role": "user", "content": prompt})
 
-        # send full conversation to GPT
+        # Call GPT with tool definition
         response = openai.chat.completions.create(
             model="gpt-4o-mini",
             messages=sessions[session_id],
+            tools=tools
         )
 
-        reply = response.choices[0].message.content
+        choice = response.choices[0]
+        message = choice.message
 
-        # append assistant reply
+        # --- CASE 1: GPT calls one or more tools ---
+        if message.tool_calls:
+            sessions[session_id].append(message)  # Save tool request
+
+            for tool_call in message.tool_calls:
+                try:
+                    logger.info(f"Tool call: {tool_call.function.name} with args {tool_call.function.arguments}")
+
+                    if tool_call.function.name == "search_spotify":
+                        args = json.loads(tool_call.function.arguments)
+                        raw = search_spotify(args["query"], args.get("type_", "track"))
+                        formatted = format_spotify_results(raw)
+
+                        sessions[session_id].append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(formatted)
+                        })
+
+                    else:
+                        sessions[session_id].append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps({"error": f"Unknown tool {tool_call.function.name}"})
+                        })
+
+                except Exception as e:
+                    logger.exception("Tool handling error")
+                    sessions[session_id].append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps({"error": str(e)})
+                    })
+
+            # ✅ Only after responding to ALL tool calls, continue the chat
+            response = openai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=sessions[session_id],
+            )
+            reply = response.choices[0].message.content
+
+        # --- CASE 2: Normal conversation ---
+        else:
+            reply = message.content
+
+        # Save assistant reply
         sessions[session_id].append({"role": "assistant", "content": reply})
 
         return {"reply": reply}
@@ -117,13 +214,23 @@ async def chat(
 
 
 
-
 # ---------------------------
 # Text-to-Speech (ElevenLabs via raw requests)
 # ---------------------------
+
+
+def strip_links_for_tts(text: str) -> str:
+    # Remove raw URLs inside parentheses, keep only visible song/artist names
+    return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
+
+
+
 @app.post("/tts")
 async def text_to_speech(text: str = Form(...)):
-    if not text or not text.strip():
+
+    clean_text = strip_links_for_tts(text)
+
+    if not clean_text.strip():
         raise HTTPException(status_code=400, detail="Missing 'text'")
 
     if not ELEVEN_API_KEY:
@@ -139,7 +246,8 @@ async def text_to_speech(text: str = Form(...)):
             "accept": "audio/mpeg",
             "content-type": "application/json",
         }
-        payload = {"text": text, "model_id": model_id}
+        
+        payload = {"text": clean_text, "model_id": model_id}
 
         r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
 
@@ -182,250 +290,98 @@ async def text_to_speech(text: str = Form(...)):
         logger.exception("TTS unexpected error")
         return JSONResponse(status_code=502, content={"error": str(e)})
 
-# --------------------------- new codes
 
 
-# ---------------------------
-# HeyGen: local photo -> talking_photo -> video -> save mp4 (no AV4 required)
-# ---------------------------
-# ---------------------------
-# HeyGen: Generate, poll, download, and local-photo test (Talking Photo)
-# ---------------------------
-import time
-import json
-import requests
-from pathlib import Path
-from typing import Optional
-from fastapi import Form, HTTPException
-from fastapi.responses import JSONResponse, Response
 
-# =========================
-# HeyGen one-shot endpoint
-# =========================
-import os
-import time
-import json
-import requests
-from pathlib import Path
-from fastapi import Form, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
-import logging
-from dotenv import load_dotenv
+# -------------------------------
+# spotify related
+# -------------------------------
 
-# Ensure env is loaded and logger exists (safe if already done earlier)
-load_dotenv()
-logger = logging.getLogger("uvicorn.error")
 
-HEYGEN_API_KEY = os.getenv("HEYGEN_API_KEY")
-if not HEYGEN_API_KEY:
-    logger.warning("HEYGEN_API_KEY is missing; /heygen/* routes will fail if called.")
+def get_spotify_token():
+    auth_str = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}"
+    b64_auth_str = base64.b64encode(auth_str.encode()).decode()
 
-def _probe_cdn_has_bytes(url: str, max_tries: int = 12, sleep_s: float = 1.5) -> int:
-    """
-    Return an expected content length (>0 if known) once CDN is ready.
-    Uses HEAD and a 1-byte Range probe; retries a few times.
-    """
-    for _ in range(max_tries):
-        try:
-            h = requests.head(
-                url,
-                timeout=15,
-                allow_redirects=True,
-                headers={"User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-            )
-            cl = h.headers.get("Content-Length") or h.headers.get("content-length")
-            if h.status_code == 200 and cl and int(cl) > 0:
-                return int(cl)
+    headers = {"Authorization": f"Basic {b64_auth_str}"}
+    data = {"grant_type": "client_credentials"}
 
-            # Tiny range probe: if we get even 1 byte, CDN is ready
-            r = requests.get(
-                url,
-                timeout=15,
-                headers={"Range": "bytes=0-1", "User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-            )
-            if r.status_code in (200, 206) and r.content:
-                return max(int(cl or 0), len(r.content))
-        except Exception:
-            pass
-        time.sleep(sleep_s)
-    return 0
+    r = requests.post("https://accounts.spotify.com/api/token", headers=headers, data=data)
+    r.raise_for_status()
+    return r.json()["access_token"]
 
-@app.post("/heygen/generate_and_download")
-async def heygen_generate_and_download(
-    input_text: str = Form(..., description="Speech text for the avatar"),
-    avatar_id: str = Form("af5820d3e6bb42609e4782cc89db0aee"),
-    voice_id: str = Form("2d5b0e6cf36f460aa7fc47e3eee4ba54"),
-    avatar_style: str = Form("normal"),
-    bg_type: str = Form("color"),
-    bg_value: str = Form("#008000"),
-    width: int = Form(1280),
-    height: int = Form(720),
-    # File naming & polling controls
-    filename: str = Form("generated_video.mp4"),
-    poll_interval: int = Form(5),
-    max_wait_seconds: int = Form(300),
-):
-    """
-    1) Generate (v2)
-    2) Poll status (v1) until 'completed' (handles waiting/queued/in_progress/processing/pending)
-    3) Wait for CDN bytes (HEAD + Range probe)
-    4) Stream MP4 to client while saving to ./downloads/<filename>
-    """
-    try:
-        if not HEYGEN_API_KEY:
-            raise HTTPException(status_code=500, detail="HEYGEN_API_KEY is missing")
 
-        # 1) Generate
-        logger.info(f"[HeyGen] Starting generation for text='{input_text[:50]}...'")
-        gen_payload = {
-            "video_inputs": [
-                {
-                    "character": {"type": "talking_photo", "talking_photo_id": avatar_id, "avatar_style": avatar_style},
-                    "voice": {"type": "text", "input_text": input_text, "voice_id": voice_id},
-                    "background": {"type": bg_type, "value": bg_value},
-                }
-            ],
-            "dimension": {"width": width, "height": height},
-        }
-        gen = requests.post(
-            "https://api.heygen.com/v2/video/generate",
-            headers={"X-Api-Key": HEYGEN_API_KEY, "Content-Type": "application/json"},
-            data=json.dumps(gen_payload),
-            timeout=60,
-        )
-        if gen.status_code != 200:
-            try:
-                err_json = gen.json()
-            except Exception:
-                err_json = {"raw": gen.text[:2048]}
-            logger.error(f"[HeyGen] Generate failed: {err_json}")
-            return JSONResponse(status_code=502, content={"error": "HeyGen generate failed", "details": err_json})
+def search_spotify(query: str, type_: str = "track", limit: int = 3):
+    token = get_spotify_token()
+    url = "https://api.spotify.com/v1/search"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"q": query, "type": type_, "limit": limit}
+    r = requests.get(url, headers=headers, params=params)
+    r.raise_for_status()
+    return r.json()
 
-        gen_json = gen.json()
-        video_id = (gen_json.get("data") or {}).get("video_id")
-        if not video_id:
-            logger.error("[HeyGen] No video_id returned")
-            return JSONResponse(status_code=502, content={"error": "Missing video_id in HeyGen response", "raw": gen_json})
-        logger.info(f"[HeyGen] Generation started, video_id={video_id}")
 
-        # 2) Poll until completed
-        headers = {"X-Api-Key": HEYGEN_API_KEY}
-        status_url = f"https://api.heygen.com/v1/video_status.get?video_id={video_id}"
-        started = time.time()
 
-        # Include all transitional states we’ve seen in the wild
-        transitional = {"waiting", "queued", "in_progress", "processing", "pending", "rendering"}
 
-        while True:
-            resp = requests.get(status_url, headers=headers, timeout=30)
-            if resp.status_code != 200:
-                try:
-                    err = resp.json()
-                except Exception:
-                    err = {"raw": resp.text[:2048]}
-                logger.error(f"[HeyGen] Status check failed: {err}")
-                return JSONResponse(status_code=502, content={"error": "Status check failed", "details": err})
+def format_spotify_results(raw):
+    results = []
 
-            j = resp.json()
-            data = (j.get("data") or {})
-            status = data.get("status")
-            logger.info(f"[HeyGen] video_id={video_id} status={status}")
-
-            if status == "completed":
-                video_url = data.get("video_url")
-                thumbnail_url = data.get("thumbnail_url")
-                if not video_url:
-                    logger.error(f"[HeyGen] Completed but no video_url for video_id={video_id}")
-                    return JSONResponse(status_code=502, content={"error": "No video_url in completed status", "raw": j})
-                logger.info(f"[HeyGen] Video ready: {video_url}")
-                break
-
-            if status in transitional:
-                # Optional: slower polling for early queue states
-                if status in {"waiting", "queued"}:
-                    sleep_s = max(2, int(poll_interval) * 2)
-                else:
-                    sleep_s = max(1, int(poll_interval))
-
-                if (time.time() - started) > int(max_wait_seconds):
-                    logger.error(f"[HeyGen] Timeout waiting for completion video_id={video_id}, last_status={status}")
-                    return JSONResponse(
-                        status_code=504,
-                        content={
-                            "error": "Timeout waiting for video to complete",
-                            "video_id": video_id,
-                            "last_status": status,
-                            "waited_seconds": int(time.time() - started),
-                        },
-                    )
-
-                time.sleep(sleep_s)
+    if "tracks" in raw:
+        for t in raw["tracks"]["items"][:3]:
+            url = t.get("external_urls", {}).get("spotify")
+            if not url:
                 continue
+            results.append({
+                "name": t["name"],
+                "artist": t["artists"][0]["name"],
+                "url": url
+            })
 
-            if status == "failed":
-                logger.error(f"[HeyGen] Generation failed: {data.get('error')}")
-                return JSONResponse(status_code=502, content={"error": "Video generation failed", "details": data.get("error"), "raw": j})
+    elif "playlists" in raw:
+        for p in raw["playlists"]["items"][:3]:
+            if not p:  # skip None
+                continue
+            url = p.get("external_urls", {}).get("spotify") if p.get("external_urls") else None
+            if not url:
+                continue
+            results.append({
+                "name": p.get("name", "Unknown Playlist"),
+                "artist": "Playlist",
+                "url": url
+            })
 
-            logger.warning(f"[HeyGen] Unexpected status={status} for video_id={video_id}")
-            return JSONResponse(status_code=502, content={"error": f"Unexpected status: {status}", "raw": j})
 
-        # 3) Wait for CDN to have bytes
-        expected_len = _probe_cdn_has_bytes(video_url, max_tries=12, sleep_s=1.5)
-        logger.info(f"[HeyGen] video_id={video_id} CDN content length={expected_len}")
+    elif "artists" in raw:
+        for a in raw["artists"]["items"][:3]:
+            url = a.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": a["name"],
+                "artist": "Artist",
+                "url": url
+            })
 
-        # 4) Stream and save
-        base_dir = Path(__file__).parent.resolve()
-        downloads_dir = base_dir / "downloads"
-        downloads_dir.mkdir(parents=True, exist_ok=True)
-        out_path = (downloads_dir / filename).resolve()
-        logger.info(f"[HeyGen] Saving to {out_path}")
+    elif "albums" in raw:
+        for al in raw["albums"]["items"][:3]:
+            url = al.get("external_urls", {}).get("spotify")
+            if not url:
+                continue
+            results.append({
+                "name": al["name"],
+                "artist": al["artists"][0]["name"],
+                "url": url
+            })
 
-        upstream = requests.get(
-            video_url,
-            stream=True,
-            timeout=300,
-            headers={"User-Agent": "Mozilla/5.0", "Accept": "video/mp4,*/*"},
-        )
-        if upstream.status_code not in (200, 206):
-            logger.error(f"[HeyGen] Stream open failed: {upstream.status_code}")
-            return JSONResponse(
-                status_code=502,
-                content={"error": "Failed to open video stream", "status_code": upstream.status_code, "headers": dict(upstream.headers)},
-            )
+    return results
 
-        def iter_and_save():
-            bytes_written = 0
-            with open(out_path, "wb") as f:
-                for chunk in upstream.iter_content(chunk_size=1024 * 128):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    bytes_written += len(chunk)
-                    yield chunk
-            logger.info(f"[HeyGen] Finished writing {bytes_written} bytes to {out_path}")
-            if bytes_written == 0:
-                try:
-                    out_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
 
-        headers_out = {
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Cache-Control": "no-store",
-            "X-HeyGen-Video-Id": video_id,
-            "X-HeyGen-Video-URL": video_url,
-            "X-Saved-Path": str(out_path),
-        }
-        if thumbnail_url:
-            headers_out["X-HeyGen-Thumbnail-URL"] = thumbnail_url
-        if expected_len:
-            headers_out["Content-Length"] = str(expected_len)
 
-        logger.info(f"[HeyGen] Streaming video_id={video_id} to client")
-        return StreamingResponse(iter_and_save(), media_type="video/mp4", headers=headers_out)
 
-    except HTTPException:
-        raise
+@app.get("/spotify/search")
+def spotify_search(query: str, type_: str = "track"):
+    try:
+        raw = search_spotify(query, type_)
+        return format_spotify_results(raw)
     except Exception as e:
-        logger.exception("[HeyGen] generate_and_download (robust) unexpected error")
+        logger.exception("Spotify search error")
         return JSONResponse(status_code=500, content={"error": str(e)})

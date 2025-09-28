@@ -25,6 +25,20 @@ export default function App() {
   const [error, setError] = useState("");
 
   // --- Helpers ---
+
+  function renderMessage(content) {
+    if (!content) return "";
+    // Turn Spotify links in (...) into shorter clickable text
+    return content.replace(
+      /\(https:\/\/open\.spotify\.com[^\)]+\)/g,
+      (match) => {
+        const url = match.slice(1, -1); // strip parentheses
+        return ` (<a href="${url}" target="_blank" rel="noopener noreferrer">open in Spotify</a>)`;
+      }
+    );
+  }
+
+
   const latestAssistantText = () => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === "assistant" && messages[i].content?.trim()) {
@@ -321,10 +335,13 @@ export default function App() {
 
         <div className="chat-messages">
           {messages.map((m) => (
-            <div key={m.id} className={`message ${m.role}`}>
-              {m.role === "assistant" && "🎵 "}
-              {m.content}
-            </div>
+            <div
+              key={m.id}
+              className={`message ${m.role}`}
+              dangerouslySetInnerHTML={{
+                __html: (m.role === "assistant" ? "🎵 " : "") + renderMessage(m.content),
+              }}
+            />
           ))}
         </div>
 

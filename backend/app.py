@@ -429,6 +429,7 @@ def _ensure_data_url(s: str) -> str:
         return s
     return f"data:image/jpeg;base64,{s}"
 
+# Wrap Herdora in OpenAI style
 def _herdora_client() -> openai.OpenAI:
     if not HERDORA_API_KEY:
         raise HTTPException(status_code=500, detail="HERDORA_API_KEY is not set")

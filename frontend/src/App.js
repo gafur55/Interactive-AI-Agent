@@ -19,7 +19,31 @@ export default function App() {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [currentAudio, setCurrentAudio] = useState(null);
   const [isBusy, setIsBusy] = useState(false);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [error, setError] = useState("");
+
+  // ✅ Refs to track state without recreating interval
+  const isRecordingRef = useRef(isRecording);
+  const isBusyRef = useRef(isBusy);
+  const isAudioPlayingRef = useRef(isAudioPlaying);
+  const currentAudioRef = useRef(currentAudio);
+
+  // ✅ Keep refs in sync with state
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    isBusyRef.current = isBusy;
+  }, [isBusy]);
+
+  useEffect(() => {
+    isAudioPlayingRef.current = isAudioPlaying;
+  }, [isAudioPlaying]);
+
+  useEffect(() => {
+    currentAudioRef.current = currentAudio;
+  }, [currentAudio]);
 
   function addMessage(role, content) {
     setMessages(prev => [
@@ -41,29 +65,55 @@ export default function App() {
   // Set lower default volume on first render
   useEffect(() => {
     if (bgVideoRef.current) {
-      bgVideoRef.current.volume = 0.05;   // lower to 20% loudness
+      bgVideoRef.current.volume = 0.05;
     }
   }, []);
 
+  // ✅ FIXED: Interval only created once, checks all activity states
   useEffect(() => {
     const interval = setInterval(() => {
-      if (!isRecording) {
-        // ✅ Only runs when the Talk button is NOT recording
+      // ✅ Only run if user is completely idle
+      if (!isRecordingRef.current && !isBusyRef.current && !isAudioPlayingRef.current && !currentAudioRef.current) {
+        console.log("✅ Timer fired - user is idle, checking in");
         callMyMethod();
+      } else {
+        console.log("⏸️ Timer skipped - user is active:", {
+          recording: isRecordingRef.current,
+          busy: isBusyRef.current,
+          audioPlaying: isAudioPlayingRef.current,
+          currentAudio: !!currentAudioRef.current
+        });
       }
-    }, 40000); // 30s
+    }, 300000); // idle time
 
     return () => clearInterval(interval);
-  }, [isRecording]); // depend on isRecording so it always knows current state
+  }, []); // ✅ Empty deps - interval never recreated
 
   async function callMyMethod() {
-      
-      console.log("callMyMethod executed — Talk button is idle");
+    try {
+      console.log("callMyMethod started");
+
+      // ✅ Set busy state at the START
+      setIsBusy(true);
+
+      // ✅ Double-check before snapshot - user might have started recording
+      if (isRecordingRef.current || isAudioPlayingRef.current) {
+        console.log("❌ Aborted: User became active before snapshot");
+        setIsBusy(false);
+        return;
+      }
 
       const snapRes = await fetch(`${API_BASE}/camera/snapshot`);
-        if (!snapRes.ok) throw new Error("Failed to capture snapshot");
-        const { image_base64 } = await snapRes.json();
-        console.log("📸 idle snapshot ok, base64 len:", image_base64?.length || 0);
+      if (!snapRes.ok) throw new Error("Failed to capture snapshot");
+      const { image_base64 } = await snapRes.json();
+      console.log("📸 idle snapshot ok, base64 len:", image_base64?.length || 0);
+
+      // ✅ Check again after snapshot
+      if (isRecordingRef.current || isAudioPlayingRef.current) {
+        console.log("❌ Aborted: User became active after snapshot");
+        setIsBusy(false);
+        return;
+      }
 
       const hedoraRes = await fetch(`${API_BASE}/get_hedora_text`, {
         method: "POST",
@@ -75,11 +125,18 @@ export default function App() {
         }),
       });
 
-      if (!hedoraRes.ok) throw new Error("Herdora analysis failed");
+      if (!hedoraRes.ok) throw new Error("Hedora analysis failed");
       const { text: hedoraText } = await hedoraRes.json();
       console.log("📝 hedora text:", hedoraText);
 
-    const chatRes = await fetch(`${API_BASE}/chat_from_hedora_text`, {
+      // ✅ Check again after hedora
+      if (isRecordingRef.current || isAudioPlayingRef.current) {
+        console.log("❌ Aborted: User became active after hedora");
+        setIsBusy(false);
+        return;
+      }
+
+      const chatRes = await fetch(`${API_BASE}/chat_from_hedora_text`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ hedora_text: hedoraText }),
@@ -87,6 +144,13 @@ export default function App() {
       if (!chatRes.ok) throw new Error("Chat conversion failed");
       const { reply } = await chatRes.json();
       console.log("💬 reply:", reply);
+
+      // ✅ Final check before playing audio
+      if (isRecordingRef.current || isAudioPlayingRef.current) {
+        console.log("❌ Aborted: User became active before TTS");
+        setIsBusy(false);
+        return;
+      }
 
       addMessage("assistant", reply);
 
@@ -98,6 +162,12 @@ export default function App() {
         });
         if (ttsRes.ok) {
           const audioBlob = await ttsRes.blob();
+          // ✅ One more check right before playing
+          if (isRecordingRef.current || isAudioPlayingRef.current) {
+            console.log("❌ Aborted: User became active right before audio play");
+            setIsBusy(false);
+            return;
+          }
           await playAudioBlob(audioBlob);
         } else {
           console.error("TTS error:", await ttsRes.text());
@@ -106,7 +176,12 @@ export default function App() {
       } else {
         if (!isRecording) unmuteBg();
       }
-
+    } catch (err) {
+      console.error("callMyMethod error:", err);
+    } finally {
+      // ✅ Always clear busy state
+      setIsBusy(false);
+    }
   }
 
   function renderMessage(content) {
@@ -120,18 +195,10 @@ export default function App() {
     );
   }
 
-  const latestAssistantText = () => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant" && messages[i].content?.trim()) {
-        return messages[i].content;
-      }
-    }
-    return "";
-  };
-
-  // Play TTS; keep video running but muted during playback
+  // ✅ FIXED: Play TTS and track audio playing state
   const playAudioBlob = async (blob) => {
-    muteBg(); // mute while AI talks
+    muteBg();
+    setIsAudioPlaying(true); // ✅ Mark audio as playing
 
     const url = URL.createObjectURL(blob);
     if (currentAudio) {
@@ -141,21 +208,33 @@ export default function App() {
 
     audio.onended = () => {
       setCurrentAudio(null);
-      if (!isRecording) unmuteBg(); // restore bg audio after AI finishes
+      setIsAudioPlaying(false); // ✅ Clear playing state
+      if (!isRecording) unmuteBg();
     };
 
-    try { await audio.play(); } catch {}
+    audio.onerror = () => {
+      setIsAudioPlaying(false); // ✅ Clear on error
+      if (!isRecording) unmuteBg();
+    };
+
+    try {
+      await audio.play();
+    } catch (err) {
+      console.error("Audio play error:", err);
+      setIsAudioPlaying(false); // ✅ Clear if play fails
+      if (!isRecording) unmuteBg();
+    }
     setCurrentAudio(audio);
   };
 
   // --- mic -> STT -> Chat -> TTS ---
   const handleAvatarClick = async () => {
-    // On Talk press: mute bg (keep it playing)
     muteBg();
 
     if (currentAudio) {
       try { currentAudio.pause(); currentAudio.currentTime = 0; } catch {}
       setCurrentAudio(null);
+      setIsAudioPlaying(false);
     }
 
     if (isRecording && mediaRecorder) {
@@ -196,11 +275,11 @@ export default function App() {
           });
           const chatJson = await chatRes.json();
 
-          const aiText = chatJson.reply || "Sorry, I couldn’t generate a reply.";
+          const aiText = chatJson.reply || "Sorry, I couldn't generate a reply.";
           const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
           setMessages((prev) => [...prev, aiMsg]);
 
-          // TTS (AI answering) — bg stays muted while speaking
+          // TTS
           if (aiText) {
             const ttsRes = await fetch(`${API_BASE}/tts`, {
               method: "POST",
@@ -256,7 +335,7 @@ export default function App() {
       });
       const data = await res.json();
 
-      const aiText = data.reply || "Sorry, I couldn’t generate a reply.";
+      const aiText = data.reply || "Sorry, I couldn't generate a reply.";
       const aiMsg = { id: Date.now() + 1, role: "assistant", content: aiText, timestamp: new Date() };
       setMessages((prev) => [...prev, aiMsg]);
 
@@ -298,7 +377,6 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* background video plays quietly by default */}
       <video
         ref={bgVideoRef}
         autoPlay

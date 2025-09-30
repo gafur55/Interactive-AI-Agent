@@ -1,0 +1,23 @@
+services:
+  # --- Backend (FastAPI) ---
+  - type: web
+    name: interactive-ai-backend
+    env: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+
+  # --- Frontend (React) ---
+  - type: web
+    name: interactive-ai-frontend
+    env: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: build
+    envVars:
+      - key: NODE_VERSION
+        value: 18

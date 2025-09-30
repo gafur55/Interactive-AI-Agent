@@ -1,5 +1,12 @@
-fastapi
-uvicorn
-openai
-requests
-python-dotenv
+fastapi==0.117.1
+uvicorn==0.37.0
+python-multipart==0.0.20
+python-dotenv==1.1.1
+requests==2.32.5
+pydantic==2.11.9
+pandas==2.3.2
+numpy==2.2.6
+opencv-python==4.12.0.88
+pillow==11.3.0
+openai==1.109.1
+elevenlabs==2.16.0

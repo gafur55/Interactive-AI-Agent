@@ -1,5 +1,4 @@
 services:
-  # --- Backend (FastAPI) ---
   - type: web
     name: interactive-ai-backend
     env: python
@@ -10,7 +9,6 @@ services:
       - key: PYTHON_VERSION
         value: 3.11
 
-  # --- Frontend (React) ---
   - type: web
     name: interactive-ai-frontend
     env: node

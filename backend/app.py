@@ -224,59 +224,47 @@ async def chat(
 
 
 # ---------------------------
-# Text-to-Speech (ElevenLabs via raw requests)
+# Text-to-Speech (OpenAI)
 # ---------------------------
 
-
 def strip_links_for_tts(text: str) -> str:
-    # Remove raw URLs inside parentheses, keep only visible song/artist names
+    """Remove Spotify URLs from text before TTS"""
     return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
-
 
 
 @app.post("/tts")
 async def text_to_speech(text: str = Form(...)):
-
+    """
+    Text-to-Speech using OpenAI's TTS API
+    """
+    # Strip Spotify links before processing
     clean_text = strip_links_for_tts(text)
-
+    
     if not clean_text.strip():
         raise HTTPException(status_code=400, detail="Missing 'text'")
-
-    if not ELEVEN_API_KEY:
-        raise HTTPException(status_code=500, detail="ELEVEN_API_KEY is missing")
-
-    voice_id = "ZF6FPAbjXT4488VcRRnw"  # Demo voice; replace if you like
-    model_id = "eleven_multilingual_v2"
+    
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is missing")
 
     try:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        headers = {
-            "xi-api-key": ELEVEN_API_KEY,
-            "accept": "audio/mpeg",
-            "content-type": "application/json",
-        }
+        # Create a standard OpenAI client with explicit base_url to avoid Herdora conflict
+        client = openai.OpenAI(
+            api_key=OPENAI_API_KEY,
+            base_url="https://api.openai.com/v1"  # Explicitly set OpenAI's URL
+        )
         
-        payload = {"text": clean_text, "model_id": model_id}
+        # Create TTS response using OpenAI
+        response = client.audio.speech.create(
+            model="tts-1",  # or "tts-1-hd" for higher quality
+            voice="nova",  # Options: alloy, echo, fable, onyx, nova, shimmer
+            input=clean_text
+        )
 
-        r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
-
-        ct = r.headers.get("content-type", "")
-        if r.status_code != 200:
-            body_preview = r.text[:2048] if ("json" in ct or "text" in ct) else f"<{ct} {len(r.content)} bytes>"
-            logger.error(f"ElevenLabs error {r.status_code} CT={ct}: {body_preview}")
-            return JSONResponse(
-                status_code=502,
-                content={
-                    "error": "TTS provider error",
-                    "status": r.status_code,
-                    "content_type": ct,
-                    "body": body_preview,
-                },
-            )
-
-        audio_bytes = b"".join(r.iter_content(chunk_size=8192))
+        # Read audio bytes from response
+        audio_bytes = response.read()
+        
         if not audio_bytes:
-            raise HTTPException(status_code=502, detail="Empty audio from TTS provider")
+            raise HTTPException(status_code=502, detail="Empty audio from OpenAI TTS")
 
         return Response(
             content=audio_bytes,
@@ -289,18 +277,12 @@ async def text_to_speech(text: str = Form(...)):
             },
         )
 
-    except requests.Timeout:
-        logger.exception("TTS timeout")
-        raise HTTPException(status_code=504, detail="TTS timed out")
-    except requests.RequestException as e:
-        logger.exception("TTS network error")
-        raise HTTPException(status_code=502, detail=f"TTS network error: {e}")
+    except openai.APIError as e:
+        logger.exception("OpenAI TTS API error")
+        raise HTTPException(status_code=502, detail=f"OpenAI TTS error: {e}")
     except Exception as e:
         logger.exception("TTS unexpected error")
-        return JSONResponse(status_code=502, content={"error": str(e)})
-
-
-
+        raise HTTPException(status_code=500, detail=f"TTS error: {str(e)}")
 
 # -------------------------------
 # spotify related
@@ -499,50 +481,50 @@ def chat_from_hedora_text(body: HedoraText):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"OpenAI request failed: {e}")
 
-# ---------------------------
-# TTS (ElevenLabs REST)
-# ---------------------------
-def strip_links_for_tts(text: str) -> str:
-    return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
+# # ---------------------------
+# # TTS (ElevenLabs REST)
+# # ---------------------------
+# def strip_links_for_tts(text: str) -> str:
+#     return re.sub(r"\(https:\/\/open\.spotify\.com[^\)]+\)", "", text).strip()
 
-@app.post("/tts")
-async def text_to_speech(text: str = Form(...)):
-    clean_text = strip_links_for_tts(text)
-    if not clean_text.strip():
-        raise HTTPException(status_code=400, detail="Missing 'text'")
-    if not ELEVEN_API_KEY:
-        raise HTTPException(status_code=500, detail="ELEVEN_API_KEY is missing")
+# @app.post("/tts")
+# async def text_to_speech(text: str = Form(...)):
+#     clean_text = strip_links_for_tts(text)
+#     if not clean_text.strip():
+#         raise HTTPException(status_code=400, detail="Missing 'text'")
+#     if not ELEVEN_API_KEY:
+#         raise HTTPException(status_code=500, detail="ELEVEN_API_KEY is missing")
 
-    voice_id = "ZF6FPAbjXT4488VcRRnw"  # example voice
-    model_id = "eleven_multilingual_v2"
+#     voice_id = "ZF6FPAbjXT4488VcRRnw"  # example voice
+#     model_id = "eleven_multilingual_v2"
 
-    try:
-        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-        headers = {"xi-api-key": ELEVEN_API_KEY, "accept": "audio/mpeg", "content-type": "application/json"}
-        payload = {"text": clean_text, "model_id": model_id}
+#     try:
+#         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+#         headers = {"xi-api-key": ELEVEN_API_KEY, "accept": "audio/mpeg", "content-type": "application/json"}
+#         payload = {"text": clean_text, "model_id": model_id}
 
-        r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
-        ct = r.headers.get("content-type", "")
-        if r.status_code != 200:
-            body_preview = r.text[:2048] if ("json" in ct or "text" in ct) else f"<{ct} {len(r.content)} bytes>"
-            logger.error(f"ElevenLabs error {r.status_code} CT={ct}: {body_preview}")
-            return JSONResponse(status_code=502, content={"error": "TTS provider error", "status": r.status_code, "content_type": ct, "body": body_preview})
+#         r = requests.post(url, headers=headers, data=json.dumps(payload), stream=True, timeout=60)
+#         ct = r.headers.get("content-type", "")
+#         if r.status_code != 200:
+#             body_preview = r.text[:2048] if ("json" in ct or "text" in ct) else f"<{ct} {len(r.content)} bytes>"
+#             logger.error(f"ElevenLabs error {r.status_code} CT={ct}: {body_preview}")
+#             return JSONResponse(status_code=502, content={"error": "TTS provider error", "status": r.status_code, "content_type": ct, "body": body_preview})
 
-        audio_bytes = b"".join(r.iter_content(chunk_size=8192))
-        if not audio_bytes:
-            raise HTTPException(status_code=502, detail="Empty audio from TTS provider")
+#         audio_bytes = b"".join(r.iter_content(chunk_size=8192))
+#         if not audio_bytes:
+#             raise HTTPException(status_code=502, detail="Empty audio from TTS provider")
 
-        return Response(content=audio_bytes, media_type="audio/mpeg",
-                        headers={"Content-Disposition": 'inline; filename="speech.mp3"',
-                                 "Cache-Control": "no-store",
-                                 "Accept-Ranges": "bytes",
-                                 "Content-Length": str(len(audio_bytes))})
-    except requests.Timeout:
-        logger.exception("TTS timeout")
-        raise HTTPException(status_code=504, detail="TTS timed out")
-    except requests.RequestException as e:
-        logger.exception("TTS network error")
-        raise HTTPException(status_code=502, detail=f"TTS network error: {e}")
-    except Exception as e:
-        logger.exception("TTS unexpected error")
-        return JSONResponse(status_code=502, content={"error": str(e)})
+#         return Response(content=audio_bytes, media_type="audio/mpeg",
+#                         headers={"Content-Disposition": 'inline; filename="speech.mp3"',
+#                                  "Cache-Control": "no-store",
+#                                  "Accept-Ranges": "bytes",
+#                                  "Content-Length": str(len(audio_bytes))})
+#     except requests.Timeout:
+#         logger.exception("TTS timeout")
+#         raise HTTPException(status_code=504, detail="TTS timed out")
+#     except requests.RequestException as e:
+#         logger.exception("TTS network error")
+#         raise HTTPException(status_code=502, detail=f"TTS network error: {e}")
+#     except Exception as e:
+#         logger.exception("TTS unexpected error")
+#         return JSONResponse(status_code=502, content={"error": str(e)})

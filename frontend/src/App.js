@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import bacground_video from "./assets/bacground_video.mp4";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8000https://dj-vivian.onrender.com";
 const SESSION_ID = Math.random().toString(36).slice(2);
 
 export default function App() {

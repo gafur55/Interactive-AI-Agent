@@ -11,7 +11,7 @@ export default function App() {
     {
       id: 1,
       role: "assistant",
-      content: "Hello! I'm DJ Nova. Tap me to start talking!",
+      content: "Hello! I'm DJ Vivian. Tap me to start talking!",
       timestamp: new Date(),
     },
   ]);
@@ -370,7 +370,7 @@ export default function App() {
 
   const clearChat = () => {
     setMessages([
-      { id: 1, role: "assistant", content: "Hello! I'm DJ Nova. Tap me to start talking!", timestamp: new Date() },
+      { id: 1, role: "assistant", content: "Hello! I'm DJ Vivian. Tap me to start talking!", timestamp: new Date() },
     ]);
     setError("");
   };
@@ -405,7 +405,7 @@ export default function App() {
 
       <div className={`chat-sidebar ${isChatOpen ? "open" : ""}`}>
         <div className="chat-header">
-          <h3>🎵 Chat with DJ Nova</h3>
+          <h3>🎵 Chat with DJ Vivian</h3>
           <button className="close-btn" onClick={() => setIsChatOpen(false)}>×</button>
         </div>
         <div className="chat-messages">

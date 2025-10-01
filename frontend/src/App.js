@@ -71,120 +71,123 @@ export default function App() {
     }
   }, []);
 
+
+
+//Herdora implementation Disconnected
   // ✅ FIXED: Interval only created once, checks all activity states
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // ✅ Only run if user is completely idle
-      if (!isRecordingRef.current && !isBusyRef.current && !isAudioPlayingRef.current && !currentAudioRef.current) {
-        console.log("✅ Timer fired - user is idle, checking in");
-        callMyMethod();
-      } else {
-        console.log("⏸️ Timer skipped - user is active:", {
-          recording: isRecordingRef.current,
-          busy: isBusyRef.current,
-          audioPlaying: isAudioPlayingRef.current,
-          currentAudio: !!currentAudioRef.current
-        });
-      }
-    }, 300000); // idle time
+  // useEffect(() => {
+  //   const interval = setInterval(() => {
+  //     // ✅ Only run if user is completely idle
+  //     if (!isRecordingRef.current && !isBusyRef.current && !isAudioPlayingRef.current && !currentAudioRef.current) {
+  //       console.log("✅ Timer fired - user is idle, checking in");
+  //       callMyMethod();
+  //     } else {
+  //       console.log("⏸️ Timer skipped - user is active:", {
+  //         recording: isRecordingRef.current,
+  //         busy: isBusyRef.current,
+  //         audioPlaying: isAudioPlayingRef.current,
+  //         currentAudio: !!currentAudioRef.current
+  //       });
+  //     }
+  //   }, 300000); // idle time
 
-    return () => clearInterval(interval);
-  }, []); // ✅ Empty deps - interval never recreated
+  //   return () => clearInterval(interval);
+  // }, []); // ✅ Empty deps - interval never recreated
 
-  async function callMyMethod() {
-    try {
-      console.log("callMyMethod started");
+  // async function callMyMethod() {
+  //   try {
+  //     console.log("callMyMethod started");
 
-      // ✅ Set busy state at the START
-      setIsBusy(true);
+  //     // ✅ Set busy state at the START
+  //     setIsBusy(true);
 
-      // ✅ Double-check before snapshot - user might have started recording
-      if (isRecordingRef.current || isAudioPlayingRef.current) {
-        console.log("❌ Aborted: User became active before snapshot");
-        setIsBusy(false);
-        return;
-      }
+  //     // ✅ Double-check before snapshot - user might have started recording
+  //     if (isRecordingRef.current || isAudioPlayingRef.current) {
+  //       console.log("❌ Aborted: User became active before snapshot");
+  //       setIsBusy(false);
+  //       return;
+  //     }
 
-      const snapRes = await fetch(`${API_BASE}/camera/snapshot`);
-      if (!snapRes.ok) throw new Error("Failed to capture snapshot");
-      const { image_base64 } = await snapRes.json();
-      console.log("📸 idle snapshot ok, base64 len:", image_base64?.length || 0);
+  //     const snapRes = await fetch(`${API_BASE}/camera/snapshot`);
+  //     if (!snapRes.ok) throw new Error("Failed to capture snapshot");
+  //     const { image_base64 } = await snapRes.json();
+  //     console.log("📸 idle snapshot ok, base64 len:", image_base64?.length || 0);
 
-      // ✅ Check again after snapshot
-      if (isRecordingRef.current || isAudioPlayingRef.current) {
-        console.log("❌ Aborted: User became active after snapshot");
-        setIsBusy(false);
-        return;
-      }
+  //     // ✅ Check again after snapshot
+  //     if (isRecordingRef.current || isAudioPlayingRef.current) {
+  //       console.log("❌ Aborted: User became active after snapshot");
+  //       setIsBusy(false);
+  //       return;
+  //     }
 
-      const hedoraRes = await fetch(`${API_BASE}/get_hedora_text`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          image_base64,
-          prompt: "Describe the mood of this photo in one paragraph.",
-          max_tokens: 256,
-        }),
-      });
+  //     const hedoraRes = await fetch(`${API_BASE}/get_hedora_text`, {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({
+  //         image_base64,
+  //         prompt: "Describe the mood of this photo in one paragraph.",
+  //         max_tokens: 256,
+  //       }),
+  //     });
 
-      if (!hedoraRes.ok) throw new Error("Hedora analysis failed");
-      const { text: hedoraText } = await hedoraRes.json();
-      console.log("📝 hedora text:", hedoraText);
+  //     if (!hedoraRes.ok) throw new Error("Hedora analysis failed");
+  //     const { text: hedoraText } = await hedoraRes.json();
+  //     console.log("📝 hedora text:", hedoraText);
 
-      // ✅ Check again after hedora
-      if (isRecordingRef.current || isAudioPlayingRef.current) {
-        console.log("❌ Aborted: User became active after hedora");
-        setIsBusy(false);
-        return;
-      }
+  //     // ✅ Check again after hedora
+  //     if (isRecordingRef.current || isAudioPlayingRef.current) {
+  //       console.log("❌ Aborted: User became active after hedora");
+  //       setIsBusy(false);
+  //       return;
+  //     }
 
-      const chatRes = await fetch(`${API_BASE}/chat_from_hedora_text`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ hedora_text: hedoraText }),
-      });
-      if (!chatRes.ok) throw new Error("Chat conversion failed");
-      const { reply } = await chatRes.json();
-      console.log("💬 reply:", reply);
+  //     const chatRes = await fetch(`${API_BASE}/chat_from_hedora_text`, {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify({ hedora_text: hedoraText }),
+  //     });
+  //     if (!chatRes.ok) throw new Error("Chat conversion failed");
+  //     const { reply } = await chatRes.json();
+  //     console.log("💬 reply:", reply);
 
-      // ✅ Final check before playing audio
-      if (isRecordingRef.current || isAudioPlayingRef.current) {
-        console.log("❌ Aborted: User became active before TTS");
-        setIsBusy(false);
-        return;
-      }
+  //     // ✅ Final check before playing audio
+  //     if (isRecordingRef.current || isAudioPlayingRef.current) {
+  //       console.log("❌ Aborted: User became active before TTS");
+  //       setIsBusy(false);
+  //       return;
+  //     }
 
-      addMessage("assistant", reply);
+  //     addMessage("assistant", reply);
 
-      if (reply) {
-        const ttsRes = await fetch(`${API_BASE}/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ text: reply }),
-        });
-        if (ttsRes.ok) {
-          const audioBlob = await ttsRes.blob();
-          // ✅ One more check right before playing
-          if (isRecordingRef.current || isAudioPlayingRef.current) {
-            console.log("❌ Aborted: User became active right before audio play");
-            setIsBusy(false);
-            return;
-          }
-          await playAudioBlob(audioBlob);
-        } else {
-          console.error("TTS error:", await ttsRes.text());
-          if (!isRecording) unmuteBg();
-        }
-      } else {
-        if (!isRecording) unmuteBg();
-      }
-    } catch (err) {
-      console.error("callMyMethod error:", err);
-    } finally {
-      // ✅ Always clear busy state
-      setIsBusy(false);
-    }
-  }
+  //     if (reply) {
+  //       const ttsRes = await fetch(`${API_BASE}/tts`, {
+  //         method: "POST",
+  //         headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  //         body: new URLSearchParams({ text: reply }),
+  //       });
+  //       if (ttsRes.ok) {
+  //         const audioBlob = await ttsRes.blob();
+  //         // ✅ One more check right before playing
+  //         if (isRecordingRef.current || isAudioPlayingRef.current) {
+  //           console.log("❌ Aborted: User became active right before audio play");
+  //           setIsBusy(false);
+  //           return;
+  //         }
+  //         await playAudioBlob(audioBlob);
+  //       } else {
+  //         console.error("TTS error:", await ttsRes.text());
+  //         if (!isRecording) unmuteBg();
+  //       }
+  //     } else {
+  //       if (!isRecording) unmuteBg();
+  //     }
+  //   } catch (err) {
+  //     console.error("callMyMethod error:", err);
+  //   } finally {
+  //     // ✅ Always clear busy state
+  //     setIsBusy(false);
+  //   }
+  // }
 
   function renderMessage(content) {
     if (!content) return "";

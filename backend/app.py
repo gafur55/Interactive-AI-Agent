@@ -261,7 +261,7 @@ async def chat(
 @app.get("/spotify/search")
 def spotify_search(query: str, type_: str = "track"):
     """
-    Direct Spotify search endpoint.
+    Direct Spotify search endpoint.x
     
     Args:
         query: Search query

@@ -1,28 +1,20 @@
 import React from "react";
+import { CVIProvider } from "../components/cvi/components/cvi-provider";
 import { Conversation } from "../components/cvi/components/conversation";
 
 const TavusTestPage = () => {
-  const handleLeave = () => {
-    console.log("Conversation ended");
-  };
+  const conversationUrl = "https://tavus.daily.co/c2b4933c773aa403"; // From your backend response
 
   return (
-    <div
-      style={{
-        width: "100%",
-        height: "100vh",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        flexDirection: "column",
-      }}
-    >
-      <h2>🎥 Tavus Test Page</h2>
-      <Conversation
-        conversationUrl="https://api.tavus.io/cvi/conversation/YOUR_SESSION_ID"
-        onLeave={handleLeave}
-      />
-    </div>
+    <CVIProvider>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <h2>🎥 Tavus Test Page</h2>
+        <Conversation
+          conversationUrl={conversationUrl}
+          style={{ width: "100%", height: "600px", maxWidth: "1000px" }}
+        />
+      </div>
+    </CVIProvider>
   );
 };
 

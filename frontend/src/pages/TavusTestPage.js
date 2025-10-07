@@ -3,7 +3,7 @@ import { CVIProvider } from "../components/cvi/components/cvi-provider";
 import { Conversation } from "../components/cvi/components/conversation";
 
 const TavusTestPage = () => {
-  const conversationUrl = "https://tavus.daily.co/c2b4933c773aa403"; // From your backend response
+  const conversationUrl = "https://tavus.daily.co/ccf19b570eadc48f"; // From your backend response
 
   return (
     <CVIProvider>
